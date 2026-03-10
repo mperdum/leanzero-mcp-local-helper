@@ -1,0 +1,41 @@
+# Dependencies
+node_modules/
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# Build outputs
+dist/
+build/
+coverage/
+
+# Cache
+.cache/
+.temp/
+
+# DNA configuration (will be created at runtime)
+.model-dna.json
+.model-user.json
+
+# Temporary test directories
+test-*temp*/
+
+# Documentation build
+docs/_build/
