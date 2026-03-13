@@ -1,13 +1,18 @@
 {
   "name": "mcp-local-helper",
   "version": "1.0.0",
-  "description": "MCP Local Helper - Phase 1 Core DNA System",
+  "description": "MCP Local Helper - Intelligent model switching and task execution for LM Studio",
   "type": "module",
   "main": "src/index.js",
+  "bin": {
+    "mcp-local-helper": "src/server.js"
+  },
   "scripts": {
     "start": "node src/index.js",
-    "test": "node --test src/**/*.test.js",
-    "lint": "eslint src/"
+    "server": "node src/server.js",
+    "test": "node --test tests/**/*.test.js",
+    "lint": "eslint src/",
+    "dev": "node --watch src/server.js"
   },
   "keywords": [
     "mcp",
@@ -15,18 +20,23 @@
     "ai",
     "assistant",
     "dna",
-    "configuration"
+    "configuration",
+    "lm-studio",
+    "model-switching"
   ],
   "author": "MCP Local Helper Team",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/yourusername/mcp-local-helper.git"
+    "url": "https://github.com/mperdum/leanzero-mcp-local-helper.git"
   },
   "engines": {
     "node": ">=18.0.0"
   },
-  "dependencies": {},
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "zod": "^3.22.0"
+  },
   "devDependencies": {
     "eslint": "^8.0.0"
   }

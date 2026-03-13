@@ -16,7 +16,7 @@ import {
   applyMigration,
   loadDNAFromFile,
   saveDNAToFile,
-} from "./utils/model-dna-schema.js";
+} from "../src/utils/model-dna-schema.js";
 
 import {
   loadModelDNA,
@@ -30,14 +30,14 @@ import {
   resetDNA,
   clearCache,
   mergeDNALevels,
-} from "./utils/model-dna-manager.js";
+} from "../src/utils/model-dna-manager.js";
 
 import {
   mergeDNALevels as mergeDNA,
   resolveEffectiveModel,
   diffDNAConfigurations,
   validateInheritanceChain,
-} from "./utils/model-dna-inheritance.js";
+} from "../src/utils/model-dna-inheritance.js";
 
 // Test suite for schema and validation
 describe("Model DNA Schema", () => {
@@ -116,7 +116,7 @@ describe("Model DNA Schema", () => {
 describe("Model DNA Manager", () => {
   let TEST_DIR = "";
   const makeTestDir = () => {
-    TEST_DIR = `./test-dna-manager-temp-${Date.now()}`;
+    TEST_DIR = `./tests/tmp/dna-manager-${Date.now()}`;
     if (!fs.existsSync(TEST_DIR)) {
       fs.mkdirSync(TEST_DIR, { recursive: true });
     }
@@ -382,7 +382,7 @@ describe("DNA Inheritance and Merging", () => {
 describe("Integration Tests", () => {
   let TEST_DIR = "";
   const makeTestDir = () => {
-    TEST_DIR = `./test-integration-temp-${Date.now()}`;
+    TEST_DIR = `./tests/tmp/integration-${Date.now()}`;
     if (!fs.existsSync(TEST_DIR)) {
       fs.mkdirSync(TEST_DIR, { recursive: true });
     }

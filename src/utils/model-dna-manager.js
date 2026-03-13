@@ -206,38 +206,34 @@ export function createDNAFile(config = {}, projectRoot) {
   const filePath = getDNAPath(projectRoot);
   const defaults = getDefaultDNA();
 
-  // Deep merge with defaults
+  // Deep merge with defaults, preserving any custom fields
   const merged = {
-    version: config.version || defaults.version,
-    primaryRole: config.primaryRole || defaults.primaryRole,
-
+    ...defaults,
+    ...config,
     models: {
       ...defaults.models,
       ...(config.models || {}),
     },
-
     taskModelMapping: {
       ...defaults.taskModelMapping,
       ...(config.taskModelMapping || {}),
     },
-
-    memories: config.memories || defaults.memories,
-
+    memories: {
+      ...defaults.memories,
+      ...(config.memories || {}),
+    },
     usageStats: {
       ...defaults.usageStats,
       ...(config.usageStats || {}),
     },
-
     mcpIntegrations: {
       ...defaults.mcpIntegrations,
       ...(config.mcpIntegrations || {}),
     },
-
     hardwareProfile: {
       ...defaults.hardwareProfile,
       ...(config.hardwareProfile || {}),
     },
-
     fallbackStrategy: {
       ...defaults.fallbackStrategy,
       ...(config.fallbackStrategy || {}),
@@ -622,8 +618,31 @@ import {
 if (import.meta.url === `file://${process.argv[1]}`) {
   console.log("Testing DNA Manager module...");
 
-  const testDir = "./test-dna-manager";
-  import("node:fs").then(({ mkdirSync }) => {
+  const testDir = "./tests/tmp/test-dna-manager";
+  import("node:fs").then(({ mkdirSync, rmdirSync, unlinkSync, readdirSync, rmdir }) => {
+    // Clean up any previous test artifacts
+    const cleanup = (dir) => {
+      if (existsSync(dir)) {
+        try {
+          readdirSync(dir).forEach(file => {
+            const filePath = join(dir, file);
+            if (statSync(filePath).isDirectory()) {
+              cleanup(filePath);
+              rmdirSync(filePath);
+            } else {
+              unlinkSync(filePath);
+            }
+          });
+          rmdirSync(dir);
+        } catch (e) {
+          // Ignore cleanup errors
+        }
+      }
+    };
+
+    // Clean up before starting
+    cleanup(testDir);
+
     if (!existsSync(testDir)) {
       mkdirSync(testDir, { recursive: true });
     }
@@ -653,5 +672,11 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     console.log("Reset:", reset ? `v${reset.version}` : "FAIL");
 
     console.log("DNA Manager module tests complete.");
+
+    // Cleanup after tests
+    setTimeout(() => {
+      cleanup(testDir);
+      console.log("Cleaned up test artifacts");
+    }, 100);
   });
 }
