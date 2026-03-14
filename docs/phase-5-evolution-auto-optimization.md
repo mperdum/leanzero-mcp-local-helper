@@ -1,1003 +1,505 @@
-# Phase 5: Evolution & Auto-Optimization
+# Implementation Plan: Phase 5 - Evolution & Auto-Optimization
 
 ## Overview
 
-Phase 5 implements the auto-evolution system that analyzes usage patterns and automatically optimizes model configurations. This phase enables the system to learn from user feedback, detect suboptimal models, and suggest improvements without manual intervention.
+This document provides a complete implementation plan for Phase 5's auto-evolution system that analyzes usage patterns and automatically optimizes model configurations based on user feedback.
 
-**Key Components:**
-- Usage tracking system
-- Auto-evolution suggestions
-- Rating-based optimization
-- Memory evolution
+The implementation adds three new service files that integrate with the existing DNA system to track usage, analyze ratings, and suggest configuration improvements without requiring manual intervention.
 
----
+## Scope
 
-## Dependencies: Phase 4 Integration
+Phase 5 enables the system to:
+- Track task completions, model switches, and effectiveness ratings
+- Detect patterns in usage data (low ratings, high variance, underused models)
+- Generate actionable suggestions for model-task alignment improvements
+- Apply mutations automatically when explicitly requested via `model-dna evolve --apply`
 
-**Phase 4 Tools depend on Phase 5 Evolution Engine:**
+The implementation is **non-breaking** - all new components are optional utilities that can be imported and used without modifying existing code paths.
 
-The `model-dna-tool.js` handler `handleEvolveDNA()` directly calls Phase 5's `EvolutionEngine` to analyze usage patterns and generate optimization suggestions. This is a critical dependency - Phase 4 will not function without Phase 5 implementation.
+## Type System Changes
 
-### Integration Chain
+### New Data Structures in DNA Schema
 
+The following structures already exist in the DNA schema but will be fully utilized by Phase 5:
+
+```javascript
+// Usage statistics structure (already defined in model-dna-schema.js)
+usageStats: {
+  tasksCompleted: {
+    "researchBugFixes": 42,      // Count per task type
+    "executeCode": 128,
+  },
+  modelEffectiveness: {
+    "ninja-researcher": {
+      "researchBugFixes": [
+        { rating: 5, feedback: "Great!", timestamp: "2026-03-14T19:00:00Z" },
+        { rating: 4, feedback: "", timestamp: "2026-03-14T18:00:00Z" },
+        // ... sliding window of last 10 ratings per model/task combo
+      ]
+    }
+  }
+}
 ```
-Phase 4 (model-dna-tool.js)
-  └─> handleEvolveDNA(params)
-      └─> new EvolutionEngine()
-          └─> engine.analyzeAndEvolve(dna)
-              └─> [Phase 5 Evolution Engine]
+
+### New Utility Types (usage-tracker.js)
+
+```javascript
+/**
+ * UsageTracker class exports:
+ * - trackTaskCompletion(taskType, modelId, result)
+ * - trackModelSwitch(fromModel, toModel)
+ * - trackRating(modelRole, taskType, rating)
+ * - getTaskStats(taskType)
+ * - getModelStats(modelId)
+ * - getAverageRatings()
+ * - detectPatterns()
+ * - getUsageSummary()
+ */
+
+/**
+ * Task statistics return type:
+ * {
+ *   count: number,              // Total completions for task type
+ *   modelsUsed: Array<{         // Models used for this task
+ *     modelId: string,
+ *     count: number
+ *   }>,
+ *   averageRatings: Object      // { [modelId]: averageRating }
+ * }
+
+/**
+ * Model statistics return type:
+ * {
+ *   totalTasks: number,         // Total tasks executed by this model
+ *   taskBreakdown: {            // Per-task-type stats
+ *     [taskType]: {
+ *       count: number,
+ *       averageRating: string   // 2 decimal places
+ *     }
+ *   },
+ *   overallRating: string|null  // Overall average rating
+ * }
+
+/**
+ * Pattern detection return type:
+ * {
+ *   patterns: Array<{           // Detected issues/patterns
+ *     type: string,            // e.g., "high-low-rating-rate"
+ *     modelId: string,
+ *     taskType: string,
+ *     lowRatingCount: number,
+ *     totalRatings: number,
+ *     recommendation: string   // Human-readable suggestion
+ *   }>
+ * }
 ```
 
-### Required Phase 5 Components for Phase 4
+### New Service Types (evolution-engine.js)
 
-| Phase 4 File | Phase 5 Dependency | Usage |
-|-------------|-------------------|-------|
-| `model-dna-tool.js` | `EvolutionEngine` class | Called from `handleEvolveDNA()` |
-| `model-dna-tool.js` | `analyzeUsage()` method | Analyzes DNA usage statistics |
-| `model-dna-tool.js` | `generateMutations()` | Creates configuration mutations |
-| `model-dna-tool.js` | `applyMutation()` | Applies suggested changes to DNA |
+```javascript
+/**
+ * EvolutionEngine class exports:
+ * - analyzeAndEvolve(dna)
+ * - generateMutations(analysis)
+ * - applyMutation(dna, mutation)
+ * - recordEvolution(mutation, result)
+ * - getEvolutionHistory()
+ */
 
-### Phase 4 Implementation Notes
+/**
+ * Evolution analysis return type:
+ * {
+ *   totalTasks: number,         // Total tracked tasks
+ *   modelUsage: {               // Per-model usage stats
+ *     [modelRole]: {
+ *       purpose: string,
+ *       usageCount: number,
+ *       averageRating: number|null
+ *     }
+ *   },
+ *   suggestions: Array<{        // Generated suggestions
+ *     type: string,            // e.g., "low-rating"
+ *     taskType: string,
+ *     modelRole: string,
+ *     averageRating: number,
+ *     ratingCount: number,
+ *     recommendation: string,
+ *     mutation: {              // Optional mutation to apply
+ *       path: string,          // JSON path like "taskModelMapping.researchBugFixes"
+ *       value: any             // New value to set
+ *     }
+ *   }>
+ * }
 
-When implementing Phase 4, ensure the following Phase 5 components are available:
+/**
+ * Evolution result return type:
+ * {
+ *   dna: Object,               // Modified DNA configuration
+ *   mutationsApplied: Array<{  // List of applied mutations
+ *     mutation: Object,
+ *     timestamp: string
+ *   }>,
+ *   analysis: Object,          // Full analysis object
+ *   wasEvolved: boolean        // True if any mutations were applied
+ * }
 
-1. **Import EvolutionEngine** in `model-dna-tool.js`:
+/**
+ * Mutation type:
+ * {
+ *   type: string,              // e.g., "update-task-model-mapping"
+ *   path: string,              // Dot-notation path in DNA
+ *   value: any                 // New value at that path
+ * }
+```
+
+### New Service Types (rating-analyzer.js)
+
+```javascript
+/**
+ * RatingAnalyzer class exports:
+ * - analyzeModelRatings(dna)
+ * - generateSuggestions(analysis)
+ */
+
+/**
+ * Suggestion types:
+ * - "low-rating": Model has average rating below threshold with sufficient data
+ * - "high-variance": Model performance varies significantly across tasks
+ * - "underused": Model has few ratings, needs more usage for reliable stats
+ */
+
+/**
+ * Low rating suggestion type:
+ * {
+ *   type: "low-rating",
+ *   modelRole: string,
+ *   averageRating: number,
+ *   ratingCount: number,
+ *   recommendation: string
+ * }
+
+/**
+ * High variance suggestion type:
+ * {
+ *   type: "high-variance",
+ *   modelRole: string,
+ *   variance: number,
+ *   recommendation: string
+ * }
+
+/**
+ * Underused suggestion type:
+ * {
+ *   type: "underused",
+ *   modelRole: string,
+ *   ratingCount: number,
+ *   recommendation: string
+ * }
+```
+
+## Files to Create
+
+### New Files
+
+1. **`src/utils/usage-tracker.js`** - Usage tracking and analytics utility
+   - Tracks task completions with sliding window of last 10 ratings per model/task combo
+   - Records model switches between fallback attempts
+   - Stores effectiveness ratings via DNA manager integration
+   - Provides query methods for statistics and pattern detection
+
+2. **`src/services/evolution-engine.js`** - Auto-evolution service
+   - Analyzes DNA usage data to detect optimization opportunities
+   - Generates mutations for task-model reassignments based on ratings
+   - Applies mutations directly to DNA configuration
+   - Maintains evolution history (last 100 entries)
+
+3. **`src/services/rating-analyzer.js`** - Rating analysis service
+   - Analyzes model ratings across all task types
+   - Generates suggestions for low-rated, high-variance, and underused models
+   - Provides threshold-based suggestion filtering
+
+### Configuration Updates
+
+No new configuration files needed. All thresholds can be configured inline in the respective services:
+
+```javascript
+// usage-tracker.js
+this.maxHistoryItems = parseInt(process.env.MAX_HISTORY_ITEMS || "100");
+
+// evolution-engine.js
+this.evolutionThresholds = {
+  lowRatingThreshold: 3.0,
+  minRatingsForEvolution: 5,
+  maxAttempts: 3,
+};
+
+// rating-analyzer.js
+this.thresholds = {
+  lowRating: 3.0,
+  excellentRating: 4.5,
+  minRatingsForAnalysis: 5,
+};
+```
+
+Optional environment variables for customization:
+- `MAX_HISTORY_ITEMS` - Sliding window size for rating history (default: 100)
+- `EVOLUTION_LOW_RATING_THRESHOLD` - Rating below which suggestions are generated (default: 3.0)
+- `EVOLUTION_MIN_RATINGS` - Minimum ratings required before generating suggestions (default: 5)
+
+## Function Modifications
+
+### Existing Files No Changes Required
+
+**Important:** Phase 5 components are **standalone utilities**. They can be imported and used without modifying any existing files. The integration points below are optional enhancements:
+
+#### Optional Integration Points
+
+1. **`src/services/task-dispatcher.js`** - Add usage tracking call
+   - Location: `recordTaskSuccess()` method (around line 230)
+   - Add: `usageTracker.trackTaskCompletion(taskType, modelId, result)` after successful task execution
+   
+2. **`src/tools/model-dna-tool.js`** - Replace inline analysis with rating-analyzer
+   - Current: `analyzeUsage()` function (lines ~195-240)
+   - Could be replaced with: `ratingAnalyzer.analyzeModelRatings(dna)`
+   
+3. **`src/utils/model-dna-manager.js`** - Already has `recordEffectivenessRating()` which Phase 5 will use
+
+No modifications are required for Phase 5 to function. The services can be imported and called explicitly where needed.
+
+## Class Modifications
+
+### New Classes to Create
+
+1. **`UsageTracker` class** (src/utils/usage-tracker.js)
    ```javascript
-   import { EvolutionEngine } from "../services/evolution-engine.js";
+   export class UsageTracker {
+     constructor();
+     trackTaskCompletion(taskType, modelId, result);
+     trackModelSwitch(fromModel, toModel);
+     trackRating(modelRole, taskType, rating);
+     getTaskStats(taskType);
+     getModelStats(modelId);
+     getAverageRatings();
+     detectPatterns();
+     getUsageSummary();
+   }
+   
+   // Export singleton instance: export const usageTracker = new UsageTracker();
    ```
 
-2. **Instantiate EvolutionEngine** in `handleEvolveDNA()`:
+2. **`EvolutionEngine` class** (src/services/evolution-engine.js)
    ```javascript
-   const engine = new EvolutionEngine();
-   const result = engine.analyzeAndEvolve(dna);
+   export class EvolutionEngine {
+     constructor();
+     analyzeAndEvolve(dna);
+     analyzeUsage(dna);
+     generateMutations(analysis);
+     applyMutation(dna, mutation);
+     recordEvolution(mutation, result);
+     getEvolutionHistory();
+     sortByPriority(suggestions);
+     getSuggestionPriority(suggestion);
+   }
+   
+   // Export singleton instance: export const evolutionEngine = new EvolutionEngine();
    ```
 
-3. **Handle evolution result** - check `result.wasEvolved` and `result.mutationsApplied`
-
-4. **Auto-apply mutations** when `params.apply === true`
-
-**Critical Note:** If Phase 5 is not implemented, `handleEvolveDNA()` will throw an error. Consider adding a try-catch with a helpful message:
-```javascript
-try {
-  const engine = new EvolutionEngine();
-  const result = engine.analyzeAndEvolve(dna);
-} catch (error) {
-  return {
-    content: [{ type: "text", text: JSON.stringify({ 
-      error: "Evolution Engine not available. Phase 5 must be implemented first.",
-      phase: "Phase 5: Evolution & Auto-Optimization"
-    }, null, 2) }],
-    isError: true,
-  };
-}
-```
-
----
-
-## Architecture Overview
-
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                  Evolution & Auto-Optimization                      │
-├─────────────────────────────────────────────────────────────────────┤
-│                                                                       │
-│  ┌──────────────────┐        ┌──────────────────┐                   │
-│  │ Usage Tracker    │        │ Rating Analyzer  │                   │
-│  └──────────────────┘        └──────────────────┘                   │
-│         │                            │                              │
-│         ▼                            ▼                              │
-│  ┌──────────────────┐        ┌──────────────────┐                   │
-│  │ Pattern Detector │        │ Suggestion       │                   │
-│  └──────────────────┘        └──────────────────┘                   │
-│         │                            │                              │
-│         ▼                            ▼                              │
-│  ┌──────────────────────────────────────────┐                      │
-│  │         Auto-Evolution Engine            │                      │
-│  │  - Threshold Detection                   │                      │
-│  │  - Mutation Generation                   │                      │
-│  │  - Auto-Apply Logic                      │                      │
-│  └──────────────────────────────────────────┘                      │
-│                                                                       │
-└─────────────────────────────────────────────────────────────────────┘
-```
-
----
-
-## File Structure
-
-```
-src/
-├── utils/
-│   └── usage-tracker.js         # Usage tracking and analytics
-├── services/
-│   ├── evolution-engine.js      # Auto-evolution logic
-│   └── rating-analyzer.js       # Rating analysis and suggestions
-└── config/
-    └── thresholds.js            # Evolution thresholds
-```
-
----
-
-## Detailed Component Breakdown
-
-### 1. usage-tracker.js
-
-**Purpose:** Tracks and analyzes model usage patterns over time.
-
-#### Class Structure
-
-```javascript
-export class UsageTracker {
-  constructor() {
-    this.maxHistoryItems = parseInt(process.env.MAX_HISTORY_ITEMS || "100");
-  }
-  
-  // Tracking
-  trackTaskCompletion(taskType, modelId, result) { ... }
-  trackModelSwitch(fromModel, toModel) { ... }
-  trackRating(modelRole, taskType, rating) { ... }
-  
-  // Analytics
-  getTaskStats(taskType) { ... }
-  getModelStats(modelId) { ... }
-  getAverageRatings() { ... }
-  
-  // Patterns
-  detectPatterns() { ... }
-  getUsageSummary() { ... }
-}
-```
-
-#### Tracking Task Completion
-
-```javascript
-/**
- * Track task completion for analytics
- * @param {string} taskType - Task category ID
- * @param {string} modelId - Model that executed the task
- * @param {Object} result - Task execution result
- */
-trackTaskCompletion(taskType, modelId, result) {
-  const dna = loadModelDNA();
-  
-  if (!dna) return;
-
-  // Initialize tracking structures
-  dna.usageStats.tasksCompleted = dna.usageStats.tasksCompleted || {};
-  dna.usageStats.modelEffectiveness = 
-    dna.usageStats.modelEffectiveness || {};
-
-  // Update task completion count
-  dna.usageStats.tasksCompleted[taskType] = 
-    (dna.usageStats.tasksCompleted[taskType] || 0) + 1;
-
-  // Update model effectiveness tracking
-  dna.usageStats.modelEffectiveness[modelId] = 
-    dna.usageStats.modelEffectiveness[modelId] || {};
-  
-  dna.usageStats.modelEffectiveness[modelId][taskType] = 
-    dna.usageStats.modelEffectiveness[modelId][taskType] || [];
-  
-  // Add result to history
-  dna.usageStats.modelEffectiveness[modelId][taskType].push({
-    success: result.success,
-    rating: result.rating || null,
-    timestamp: new Date().toISOString(),
-  });
-
-  // Keep only last N items (sliding window)
-  const ratings = dna.usageStats.modelEffectiveness[modelId][taskType];
-  if (ratings.length > this.maxHistoryItems) {
-    dna.usageStats.modelEffectiveness[modelId][taskType] = 
-      ratings.slice(-this.maxHistoryItems);
-  }
-
-  // Write back to disk
-  createDNAFile(dna);
-}
-
-/**
- * Track model switch event
- * @param {string} fromModel - Source model ID
- * @param {string} toModel - Target model ID
- */
-trackModelSwitch(fromModel, toModel) {
-  const dna = loadModelDNA();
-  
-  if (!dna) return;
-
-  // Initialize tracking
-  dna.usageStats.modelSwitches = 
-    dna.usageStats.modelSwitches || {};
-
-  const switchKey = `${fromModel}->${toModel}`;
-  
-  dna.usageStats.modelSwitches[switchKey] = 
-    (dna.usageStats.modelSwitches[switchKey] || 0) + 1;
-
-  // Write back
-  createDNAFile(dna);
-}
-```
-
-#### Getting Task Statistics
-
-```javascript
-/**
- * Get statistics for a specific task type
- * @param {string} taskType - Task category ID
- * @returns {Object} Task statistics
- */
-getTaskStats(taskType) {
-  const dna = loadModelDNA();
-  
-  if (!dna || !dna.usageStats?.tasksCompleted?.[taskType]) {
-    return { count: 0, modelsUsed: [] };
-  }
-
-  // Get all models used for this task
-  const effectiveness = dna.usageStats.modelEffectiveness || {};
-  
-  const modelsUsed = Object.entries(effectiveness)
-    .filter(([_, taskRatings]) => taskRatings[taskType])
-    .map(([modelId, _]) => ({
-      modelId,
-      count: effectiveness[modelId][taskType].length
-    }));
-
-  return {
-    count: dna.usageStats.tasksCompleted[taskType],
-    modelsUsed,
-    averageRatings: this.calculateAverageRatings(taskType),
-  };
-}
-
-/**
- * Calculate average ratings for a task type
- */
-calculateAverageRatings(taskType) {
-  const dna = loadModelDNA();
-  
-  if (!dna?.usageStats?.modelEffectiveness) return {};
-
-  const averages = {};
-  
-  for (const [modelId, taskRatings] of Object.entries(dna.usageStats.modelEffectiveness)) {
-    if (taskRatings[taskType]) {
-      const ratings = taskRatings[taskType];
-      
-      if (ratings.length > 0) {
-        const sum = ratings.reduce((acc, r) => acc + (r.rating || 0), 0);
-        averages[modelId] = (sum / ratings.length).toFixed(2);
-      }
-    }
-  }
-
-  return averages;
-}
-```
-
-#### Getting Model Statistics
-
-```javascript
-/**
- * Get statistics for a specific model
- * @param {string} modelId - Model identifier
- * @returns {Object} Model statistics
- */
-getModelStats(modelId) {
-  const dna = loadModelDNA();
-  
-  if (!dna || !dna.usageStats?.modelEffectiveness?.[modelId]) {
-    return { 
-      totalTasks: 0, 
-      taskBreakdown: {}, 
-      overallRating: null 
-    };
-  }
-
-  const effectiveness = dna.usageStats.modelEffectiveness[modelId];
-  
-  // Calculate task breakdown
-  const taskBreakdown = {};
-  
-  for (const [taskType, ratings] of Object.entries(effectiveness)) {
-    if (ratings.length > 0) {
-      const sum = ratings.reduce((acc, r) => acc + (r.rating || 0), 0);
-      taskBreakdown[taskType] = {
-        count: ratings.length,
-        averageRating: (sum / ratings.length).toFixed(2),
-      };
-    }
-  }
-
-  // Calculate overall rating
-  const allRatings = Object.values(effectiveness).flat();
-  
-  let overallRating = null;
-  if (allRatings.length > 0) {
-    const sum = allRatings.reduce((acc, r) => acc + (r.rating || 0), 0);
-    overallRating = (sum / allRatings.length).toFixed(2);
-  }
-
-  return {
-    totalTasks: Object.values(effectiveness).flat().length,
-    taskBreakdown,
-    overallRating,
-  };
-}
-
-/**
- * Get all average ratings across all models
- * @returns {Object} All average ratings
- */
-getAverageRatings() {
-  const dna = loadModelDNA();
-  
-  if (!dna?.usageStats?.modelEffectiveness) return {};
-
-  const averages = {};
-  
-  for (const [modelId, taskRatings] of Object.entries(dna.usageStats.modelEffectiveness)) {
-    const allRatings = Object.values(taskRatings).flat();
-    
-    if (allRatings.length > 0) {
-      const sum = allRatings.reduce((acc, r) => acc + (r.rating || 0), 0);
-      averages[modelId] = {
-        average: (sum / allRatings.length).toFixed(2),
-        ratingCount: allRatings.length,
-      };
-    }
-  }
-
-  return averages;
-}
-```
-
-#### Pattern Detection
-
-```javascript
-/**
- * Detect usage patterns
- * @returns {Object} Detected patterns
- */
-detectPatterns() {
-  const dna = loadModelDNA();
-  
-  if (!dna?.usageStats) return { patterns: [] };
-
-  const patterns = [];
-  
-  // Pattern 1: High fallback rate
-  const effectiveness = dna.usageStats.modelEffectiveness || {};
-  
-  for (const [modelId, taskRatings] of Object.entries(effectiveness)) {
-    for (const [taskType, ratings] of Object.entries(taskRatings)) {
-      const lowRatingCount = ratings.filter(r => r.rating < 3).length;
-      
-      // High low-rating rate indicates potential issues
-      if (ratings.length >= 5 && 
-          lowRatingCount / ratings.length > 0.4) {
-        patterns.push({
-          type: "high-low-rating-rate",
-          modelId,
-          taskType,
-          lowRatingCount,
-          totalRatings: ratings.length,
-          recommendation: `Model "${modelId}" has high low-rating rate (${lowRatingCount}/${ratings.length}) for "${taskType}". Consider reviewing model-task alignment.`,
-        });
-      }
-    }
-  }
-
-  return { patterns };
-}
-
-/**
- * Get usage summary
- * @returns {Object} Usage summary
- */
-getUsageSummary() {
-  const dna = loadModelDNA();
-  
-  if (!dna?.usageStats) return { summary: {} };
-
-  const stats = dna.usageStats;
-  
-  // Calculate totals
-  const totalTasks = Object.values(stats.tasksCompleted || {}).reduce((a, b) => a + b, 0);
-  
-  // Calculate model usage
-  const modelUsage = {};
-  
-  for (const [modelId, taskRatings] of Object.entries(stats.modelEffectiveness || {})) {
-    modelUsage[modelId] = {
-      totalTasks: Object.values(taskRatings).flat().length,
-    };
-  }
-
-  return {
-    summary: {
-      totalTasks,
-      modelUsage,
-    },
-    lastUpdated: new Date().toISOString(),
-  };
-}
-```
-
----
-
-### 2. evolution-engine.js
-
-**Purpose:** Main auto-evolution logic that analyzes patterns and suggests improvements.
-
-#### Class Structure
-
-```javascript
-export class EvolutionEngine {
-  constructor() {
-    this.evolutionThresholds = {
-      lowRatingThreshold: 3.0,
-      minRatingsForEvolution: 5,
-      maxAttempts: 3,
-    };
-    
-    this.evolutionHistory = [];
-  }
-  
-  // Core logic
-  analyzeAndEvolve(dna) { ... }
-  generateMutations(analysis) { ... }
-  applyMutation(dna, mutation) { ... }
-  
-  // History
-  recordEvolution(mutation, result) { ... }
-  getEvolutionHistory() { ... }
-}
-```
-
-#### Analyzing and Evolving DNA
-
-```javascript
-/**
- * Analyze DNA and evolve if needed
- * @param {Object} dna - Model DNA configuration
- * @returns {Object} Evolution result with mutations applied (if any)
- */
-analyzeAndEvolve(dna) {
-  // Analyze usage patterns
-  const analysis = this.analyzeUsage(dna);
-  
-  let evolvedDna = { ...dna };
-  const mutationsApplied = [];
-  
-  // Check if evolution is needed
-  if (analysis.suggestions?.length > 0) {
-    // Sort suggestions by priority
-    const sortedSuggestions = this.sortByPriority(analysis.suggestions);
-    
-    // Apply top suggestions (up to maxAttempts)
-    for (let i = 0; i < Math.min(this.evolutionThresholds.maxAttempts, sortedSuggestions.length); i++) {
-      const suggestion = sortedSuggestions[i];
-      
-      // Apply mutation
-      evolvedDna = this.applyMutation(evolvedDna, suggestion.mutation);
-      
-      // Record mutation
-      mutationsApplied.push({
-        mutation: suggestion.mutation,
-        timestamp: new Date().toISOString(),
-      });
-      
-      this.recordEvolution(suggestion.mutation, {
-        applied: true,
-        suggestion: suggestion.type,
-      });
-    }
-  }
-
-  return {
-    dna: evolvedDna,
-    mutationsApplied,
-    analysis,
-    wasEvolved: mutationsApplied.length > 0,
-  };
-}
-
-/**
- * Sort suggestions by priority
- */
-sortByPriority(suggestions) {
-  return suggestions.sort((a, b) => {
-    // Low ratings get higher priority
-    const aPriority = this.getSuggestionPriority(a);
-    const bPriority = this.getSuggestionPriority(b);
-    
-    return bPriority - aPriority;
-  });
-}
-
-/**
- * Get suggestion priority score
- */
-getSuggestionPriority(suggestion) {
-  let score = 0;
-  
-  // Low rating suggestions get higher priority
-  if (suggestion.averageRating < 2.0) score += 10;
-  else if (suggestion.averageRating < 3.0) score += 5;
-  
-  // More ratings = higher priority (more confidence)
-  if (suggestion.ratingCount >= 10) score += 5;
-  else if (suggestion.ratingCount >= 5) score += 3;
-  
-  return score;
-}
-```
-
-#### Generating Mutations
-
-```javascript
-/**
- * Generate mutations from analysis
- * @param {Object} analysis - Usage analysis result
- * @returns {Array} Array of mutations to apply
- */
-generateMutations(analysis) {
-  const mutations = [];
-  
-  // Mutation 1: Update model purposes based on usage
-  for (const [modelRole, usage] of Object.entries(analysis.modelUsage)) {
-    if (usage.averageRating < this.evolutionThresholds.lowRatingThreshold) {
-      mutations.push({
-        type: "update-model-purpose",
-        path: `models.${modelRole}.purpose`,
-        value: this.suggestNewPurpose(modelRole, usage),
-      });
-    }
-  }
-
-  // Mutation 2: Update task-model mapping
-  if (analysis.suggestions?.length > 0) {
-    const lowRatingSuggestions = analysis.suggestions.filter(
-      s => s.type === "low-rating"
-    );
-    
-    for (const suggestion of lowRatingSuggestions) {
-      mutations.push({
-        type: "update-task-model-mapping",
-        path: `taskModelMapping.${suggestion.taskType}`,
-        value: suggestion.recommendedModel || this.suggestAlternativeTask(suggestion),
-      });
-    }
-  }
-
-  return mutations;
-}
-
-/**
- * Suggest new model purpose based on usage
- */
-suggestNewPurpose(modelRole, usage) {
-  // Analyze task breakdown to suggest better purpose
-  const tasks = Object.keys(usage.taskBreakdown || {});
-  
-  // Find most common task
-  const mostCommonTask = tasks.sort(
-    (a, b) => (usage.taskBreakdown[b]?.count || 0) - (usage.taskBreakdown[a]?.count || 0)
-  )[0];
-  
-  return `Optimized for ${mostCommonTask} tasks based on usage patterns`;
-}
-
-/**
- * Suggest alternative task assignment
- */
-suggestAlternativeTask(suggestion) {
-  // Use a model with higher rating for this task type
-  const dna = loadModelDNA();
-  
-  if (!dna) return suggestion.modelRole;
-  
-  // Find model with highest rating for this task
-  const effectiveness = dna.usageStats?.modelEffectiveness || {};
-  
-  let bestModel = suggestion.modelRole;
-  let bestRating = 0;
-  
-  for (const [modelId, taskRatings] of Object.entries(effectiveness)) {
-    if (taskRatings[suggestion.taskType]) {
-      const ratings = taskRatings[suggestion.taskType];
-      
-      if (ratings.length > 0) {
-        const sum = ratings.reduce((acc, r) => acc + (r.rating || 0), 0);
-        const avg = sum / ratings.length;
-        
-        if (avg > bestRating) {
-          bestRating = avg;
-          bestModel = modelId;
-        }
-      }
-    }
-  }
-  
-  return bestModel;
-}
-```
-
-#### Applying Mutations
-
-```javascript
-/**
- * Apply a mutation to DNA
- * @param {Object} dna - Current DNA configuration
- * @param {Object} mutation - Mutation to apply
- * @returns {Object} Modified DNA configuration
- */
-applyMutation(dna, mutation) {
-  const newDna = { ...dna };
-  
-  // Navigate to target location
-  const parts = mutation.path.split(".");
-  let target = newDna;
-  
-  for (let i = 0; i < parts.length - 1; i++) {
-    if (!target[parts[i]]) {
-      target[parts[i]] = {};
-    }
-    
-    // Create shallow copy to avoid mutating original
-    target[parts[i]] = { ...target[parts[i]] };
-    
-    target = target[parts[i]];
-  }
-  
-  // Apply mutation
-  target[parts[parts.length - 1]] = mutation.value;
-  
-  return newDna;
-}
-
-/**
- * Record evolution for history
- */
-recordEvolution(mutation, result) {
-  this.evolutionHistory.push({
-    mutation,
-    result,
-    timestamp: new Date().toISOString(),
-  });
-
-  // Keep only last 100 evolutions
-  if (this.evolutionHistory.length > 100) {
-    this.evolutionHistory = this.evolutionHistory.slice(-100);
-  }
-}
-
-/**
- * Get evolution history
- * @returns {Array} Evolution history
- */
-getEvolutionHistory() {
-  return this.evolutionHistory;
-}
-```
-
----
-
-### 3. rating-analyzer.js
-
-**Purpose:** Analyzes ratings and generates optimization suggestions.
-
-#### Class Structure
-
-```javascript
-export class RatingAnalyzer {
-  constructor() {
-    this.thresholds = {
-      lowRating: 3.0,
-      excellentRating: 4.5,
-      minRatingsForAnalysis: 5,
-    };
-    
-    this.suggestionTypes = {
-      LOW_RATING: "low-rating",
-      HIGH_VARIANCE: "high-variance",
-      UNDERUSED: "underused",
-    };
-  }
-  
-  // Analysis
-  analyzeModelRatings(dna) { ... }
-  generateSuggestions(analysis) { ... }
-  
-  // Suggestion helpers
-  createLowRatingSuggestion(modelRole, averageRating, ratingCount) { ... }
-  createHighVarianceSuggestion(modelRole, variance) { ... }
-}
-```
-
-#### Analyzing Model Ratings
-
-```javascript
-/**
- * Analyze ratings for all models
- * @param {Object} dna - Model DNA configuration
- * @returns {Object} Analysis result
- */
-analyzeModelRatings(dna) {
-  const usageStats = dna.usageStats || {};
-  const models = dna.models || {};
-  
-  const effectiveness = usageStats.modelEffectiveness || {};
-  
-  const analysis = {
-    totalTasks: Object.values(usageStats.tasksCompleted || {}).reduce((a, b) => a + b, 0),
-    modelAnalysis: {},
-    suggestions: [],
-  };
-
-  // Analyze each model
-  for (const [modelRole, config] of Object.entries(models)) {
-    const roleEffectiveness = effectiveness[modelRole];
-    
-    analysis.modelAnalysis[modelRole] = {
-      purpose: config.purpose,
-      usageCount: config.usageCount || 0,
-    };
-
-    if (roleEffectiveness) {
-      // Get all ratings for this model
-      const allRatings = Object.values(roleEffectiveness).flat();
-      
-      if (allRatings.length > 0) {
-        const ratings = allRatings.map(r => r.rating);
-        
-        // Calculate average
-        const sum = ratings.reduce((acc, r) => acc + r, 0);
-        const averageRating = sum / ratings.length;
-        
-        // Calculate variance
-        const squaredDiffs = ratings.map(r => Math.pow(r - averageRating, 2));
-        const variance = squaredDiffs.reduce((acc, r) => acc + r, 0) / ratings.length;
-        
-        analysis.modelAnalysis[modelRole].averageRating = averageRating.toFixed(2);
-        analysis.modelAnalysis[modelRole].ratingCount = ratings.length;
-        analysis.modelAnalysis[modelRole].variance = variance.toFixed(2);
-        
-        // Generate suggestions if needed
-        const suggestions = this.generateSuggestions(modelRole, averageRating, variance, ratings.length);
-        analysis.suggestions.push(...suggestions);
-      }
-    }
-  }
-
-  return analysis;
-}
-
-/**
- * Generate suggestions for a model
- */
-generateSuggestions(modelRole, averageRating, variance, ratingCount) {
-  const suggestions = [];
-  
-  // Low rating suggestion
-  if (averageRating < this.thresholds.lowRating && 
-      ratingCount >= this.thresholds.minRatingsForAnalysis) {
-    suggestions.push(this.createLowRatingSuggestion(modelRole, averageRating, ratingCount));
-  }
-
-  // High variance suggestion
-  if (variance > 1.0 && ratingCount >= this.thresholds.minRatingsForAnalysis) {
-    suggestions.push(this.createHighVarianceSuggestion(modelRole, variance));
-  }
-
-  // Underused model suggestion
-  if (ratingCount < this.thresholds.minRatingsForAnalysis && ratingCount > 0) {
-    suggestions.push(this.createUnderusedSuggestion(modelRole, ratingCount));
-  }
-
-  return suggestions;
-}
-
-/**
- * Create low rating suggestion
- */
-createLowRatingSuggestion(modelRole, averageRating, ratingCount) {
-  return {
-    type: this.suggestionTypes.LOW_RATING,
-    modelRole,
-    averageRating: parseFloat(averageRating.toFixed(2)),
-    ratingCount,
-    recommendation: `Model "${modelRole}" has low average rating (${averageRating.toFixed(2)}). Consider reviewing model-task alignment or model quality.`,
-  };
-}
-
-/**
- * Create high variance suggestion
- */
-createHighVarianceSuggestion(modelRole, variance) {
-  return {
-    type: this.suggestionTypes.HIGH_VARIANCE,
-    modelRole,
-    variance: parseFloat(variance.toFixed(2)),
-    recommendation: `Model "${modelRole}" has high rating variance (${variance.toFixed(2)}). This may indicate inconsistent performance across different task types.`,
-  };
-}
-
-/**
- * Create underused model suggestion
- */
-createUnderusedSuggestion(modelRole, ratingCount) {
-  return {
-    type: this.suggestionTypes.UNDERUSED,
-    modelRole,
-    ratingCount,
-    recommendation: `Model "${modelRole}" has few ratings (${ratingCount}). Consider using this model more to gather more data.`,
-  };
-}
-```
-
----
-
-## Integration Points
-
-### With DNA System
-
-```javascript
-import { loadModelDNA, createDNAFile } from '../utils/model-dna-manager.js';
-import { EvolutionEngine } from './evolution-engine.js';
-
-const evolutionEngine = new EvolutionEngine();
-
-// Analyze and evolve DNA
-const result = evolutionEngine.analyzeAndEvolve(dna);
-
-if (result.wasEvolved) {
-  createDNAFile(result.dna);
-}
-```
-
-### With Task Dispatcher
-
-```javascript
-// Task dispatcher triggers evolution after task completion
-async executeTask(query, dna) {
-  // ... existing code ...
-  
-  if (result.success) {
-    // Record usage
-    this.recordTaskSuccess(taskType, modelId);
-    
-    // Trigger evolution check
-    const evolutionResult = evolutionEngine.analyzeAndEvolve(dna);
-    
-    if (evolutionResult.wasEvolved) {
-      console.log(`[TaskDispatcher] DNA evolved: ${evolutionResult.mutationsApplied.length} mutations applied`);
-    }
-  }
-}
-```
-
----
+3. **`RatingAnalyzer` class** (src/services/rating-analyzer.js)
+   ```javascript
+   export class RatingAnalyzer {
+     constructor();
+     analyzeModelRatings(dna);
+     generateSuggestions(modelRole, averageRating, variance, ratingCount);
+     createLowRatingSuggestion(modelRole, averageRating, ratingCount);
+     createHighVarianceSuggestion(modelRole, variance);
+     createUnderusedSuggestion(modelRole, ratingCount);
+   }
+   
+   // Export singleton instance: export const ratingAnalyzer = new RatingAnalyzer();
+   ```
+
+### Existing Classes No Modifications Required
+
+No existing classes need to be modified. Phase 5 services are designed as standalone utilities that can be imported and used without affecting current code paths.
+
+## Dependencies
+
+### No New npm Dependencies
+
+Phase 5 uses only Node.js built-in modules:
+- `node:fs` - File operations (already used by DNA manager)
+- `node:path` - Path manipulation (already used by DNA manager)
+- `node:url` - URL utilities (already used by DNA manager)
+
+No new packages need to be installed. All functionality builds on existing infrastructure.
 
 ## Testing Strategy
 
-### Unit Tests for Usage Tracker
+### Unit Tests Structure
+
+Tests should be added to `tests/phase-5/` directory:
+
+#### Phase 5 Test Files Needed
+
+1. **`tests/usage-tracker.test.js`**
+   - Test tracking task completions with sliding window
+   - Test model switch recording
+   - Test statistics queries (getTaskStats, getModelStats)
+   - Test pattern detection logic
+   
+2. **`tests/rating-analyzer.test.js`**
+   - Test rating analysis for single and multiple models
+   - Test suggestion generation for low-rating cases
+   - Test high-variance detection
+   - Test underused model detection
+   
+3. **`tests/evolution-engine.test.js`**
+   - Test analyzeAndEvolve with no mutations needed
+   - Test mutation generation from analysis
+   - Test mutation application to DNA structure
+   - Test evolution history tracking
+
+#### Example Test Structure (using Node's built-in test runner)
 
 ```javascript
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
+import { UsageTracker } from '../../src/utils/usage-tracker.js';
+import { loadModelDNA, createDNAFile } from '../../src/utils/model-dna-manager.js';
 
-describe('Usage Tracker', () => {
-  let usageTracker;
+describe('UsageTracker', () => {
+  let tracker;
+  let testDir;
 
   beforeEach(() => {
-    usageTracker = new UsageTracker();
+    testDir = './tests/tmp/test-phase5';
+    tracker = new UsageTracker();
     
-    // Mock dependencies
-    global.loadModelDNA = () => ({ usageStats: {} });
-    global.createDNAFile = () => {};
+    // Setup: create clean DNA file for testing
+    if (!existsSync(testDir)) {
+      mkdirSync(testDir, { recursive: true });
+    }
+    createDNAFile({}, testDir);
+  });
+
+  afterEach(() => {
+    // Cleanup
+    rmSync(testDir, { recursive: true, force: true });
   });
 
   describe('trackTaskCompletion()', () => {
-    it('should track task completion', async () => {
-      await usageTracker.trackTaskCompletion('codeFixes', 'model1', { success: true });
+    it('should track task completion and update usageStats', async () => {
+      await tracker.trackTaskCompletion('researchBugFixes', 'ninja-researcher', { success: true });
       
-      // Verify tracking occurred
-      assert.ok(true); // Assertion for mock verification
-    });
-  });
-
-  describe('getTaskStats()', () => {
-    it('should return task statistics', async () => {
-      const stats = await usageTracker.getTaskStats('codeFixes');
-      
-      assert.ok(stats.count >= 0);
-    });
-  });
-});
-```
-
-### Unit Tests for Evolution Engine
-
-```javascript
-import { describe, it } from 'node:test';
-import assert from 'node:assert';
-
-describe('Evolution Engine', () => {
-  let evolutionEngine;
-
-  beforeEach(() => {
-    evolutionEngine = new EvolutionEngine();
-  });
-
-  describe('analyzeAndEvolve()', () => {
-    it('should return dna without mutations if no evolution needed', async () => {
-      const dna = {
-        usageStats: { modelEffectiveness: {} },
-        models: {}
-      };
-      
-      const result = evolutionEngine.analyzeAndEvolve(dna);
-      
-      assert.strictEqual(result.wasEvolved, false);
+      const dna = loadModelDNA(testDir);
+      assert.strictEqual(dna.usageStats.tasksCompleted['researchBugFixes'], 1);
     });
 
-    it('should apply mutations when evolution needed', async () => {
-      const dna = {
-        usageStats: {
-          modelEffectiveness: {
-            testModel: {
-              codeFixes: Array(5).fill({ rating: 1 })
-            }
-          }
-        },
-        models: { testModel: { purpose: 'test' } }
-      };
+    it('should maintain sliding window of last 10 ratings per model/task combo', async () => {
+      // Track 15 completions with ratings
+      for (let i = 0; i < 15; i++) {
+        await tracker.trackTaskCompletion('executeCode', 'executor', { 
+          success: true,
+          rating: i % 5 + 1
+        });
+      }
       
-      const result = evolutionEngine.analyzeAndEvolve(dna);
-      
-      assert.strictEqual(result.wasEvolved, true);
+      const dna = loadModelDNA(testDir);
+      const ratings = dna.usageStats.modelEffectiveness['executor']['executeCode'];
+      assert.strictEqual(ratings.length, 10); // Should be capped at 10
     });
   });
 });
 ```
 
----
+### Integration Tests
 
-## Configuration
+4. **`tests/phase-5-integration.test.js`** - Test end-to-end flow:
+   - Task execution → usage tracking → rating analysis → evolution suggestions
+   - Verify mutations are correctly applied to DNA structure
 
-### Evolution Thresholds
+### Manual Testing Checklist
 
-```json
-{
-  "evolutionThresholds": {
-    "lowRatingThreshold": 3.0,
-    "minRatingsForEvolution": 5,
-    "maxAttempts": 3
-  }
-}
-```
+1. Initialize Model DNA with `model-dna init`
+2. Execute various tasks through the system
+3. Manually record ratings using `recordEffectivenessRating()` helper
+4. Run `model-dna evolve` and verify suggestions are generated
+5. Apply mutations with `model-dna evolve --apply` and verify DNA changes
 
-### Auto-Evolution Settings
+## Implementation Order
 
-```json
-{
-  "autoEvolution": {
-    "enabled": true,
-    "checkInterval": 3600000, // 1 hour
-    "applyAutomatically": false
-  }
-}
-```
+### Step 1: Create Usage Tracker (src/utils/usage-tracker.js)
+- Implement constructor with configurable maxHistoryItems
+- Add trackTaskCompletion() with sliding window logic
+- Add trackModelSwitch() for recording fallback events
+- Add trackRating() for manual rating entries
+- Add getTaskStats(), getModelStats(), getAverageRatings() query methods
+- Add detectPatterns() for issue detection
+- Add getUsageSummary() for overview data
+- Export singleton instance
 
----
+### Step 2: Create Rating Analyzer (src/services/rating-analyzer.js)
+- Implement constructor with threshold configuration
+- Add analyzeModelRatings() to process all model ratings
+- Add generateSuggestions() to create suggestion objects
+- Add helper methods: createLowRatingSuggestion(), createHighVarianceSuggestion(), createUnderusedSuggestion()
+- Export singleton instance
 
-## Future Enhancements
+### Step 3: Create Evolution Engine (src/services/evolution-engine.js)
+- Implement constructor with thresholds and history array
+- Add analyzeAndEvolve() as main entry point
+- Add analyzeUsage() to generate analysis object from DNA
+- Add generateMutations() to create mutation objects from suggestions
+- Add applyMutation() for direct DNA structure modification
+- Add recordEvolution() and getEvolutionHistory() for tracking
+- Add sortByPriority() and getSuggestionPriority() helpers
+- Export singleton instance
 
-- [ ] A/B testing for model recommendations
-- [ ] Automated model retraining suggestions
-- [ ] Cross-project learning
-- [ ] Advanced pattern detection (ML-based)
+### Step 4: Update model-dna-tool.js (Optional Enhancement)
+- Import ratingAnalyzer from new service
+- Replace inline analyzeUsage() function with call to ratingAnalyzer.analyzeModelRatings()
+- Update handleEvolveDNA() to use evolutionEngine for mutation application
+
+### Step 5: Add Integration Points (Optional Enhancements)
+- In task-dispatcher.js, import usageTracker and call trackTaskCompletion after successful tasks
+- Document integration points in Phase 4 documentation
+
+### Step 6: Create Test Files
+- tests/usage-tracker.test.js
+- tests/rating-analyzer.test.js
+- tests/evolution-engine.test.js
+- tests/phase-5-integration.test.js (optional)
+
+## Quality Standards
+
+- All new files must follow existing code style (ES modules, JSDoc comments)
+- Usage tracker must maintain backward compatibility with existing DNA structure
+- Evolution engine mutations must be idempotent and safe to apply multiple times
+- Rating analyzer thresholds must be configurable via constructor or environment variables
+- All services must handle missing/empty data gracefully without throwing errors
+- Sliding window logic in usage-tracker must use `slice(-10)` for last 10 ratings per model/task combo
+
+## Risk Mitigation
+
+| Risk | Mitigation |
+|------|------------|
+| Breaking existing DNA structure | Phase 5 only reads/writes to existing `usageStats` field which already exists in schema |
+| Performance impact from tracking | Sliding window capped at 10 items per model/task; maxHistoryItems env var limits total history |
+| Incorrect mutation application | Mutations use safe path navigation with error checking; mutations are logged before application |
+| Evolution triggers too frequently | Thresholds (minRatingsForEvolution: 5, lowRatingThreshold: 3.0) prevent premature suggestions |
+
+## Success Criteria
+
+1. **Usage tracking works**: Tasks completed and ratings are stored in DNA file correctly
+2. **Pattern detection works**: Low-rating patterns are identified when thresholds are met
+3. **Evolution suggestions work**: `model-dna evolve` returns actionable suggestions
+4. **Mutation application works**: `model-dna evolve --apply` correctly modifies task-model mappings
+5. **No breaking changes**: Existing functionality continues to work without modification
+
+## Future Enhancements (Out of Scope for Phase 5)
+
+- A/B testing framework for comparing model performance
+- Automated background evolution on configurable schedule (e.g., every N tasks)
+- Cross-project learning from multiple DNA files
+- ML-based pattern detection beyond simple threshold checks
+- Visualization dashboard for usage statistics and evolution history
