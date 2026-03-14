@@ -326,6 +326,7 @@ function analyzeUsage(dna) {
   }
 
   // Second, generate suggestions by examining task-model assignments
+  // Iterate through taskModelMapping to find tasks assigned to low-rated models
   for (const [taskType, assignedModelRole] of Object.entries(taskModelMapping)) {
     const modelRating = parseFloat(analysis.modelUsage[assignedModelRole]?.averageRating);
 

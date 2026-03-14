@@ -142,6 +142,45 @@ describe("Tool Definitions", () => {
   });
 });
 
+// Helper Function Tests
+describe("Helper Functions", () => {
+  let dir;
+
+  before(() => {
+    dir = makeTestDir();
+  });
+
+  after(() => {
+    cleanupTestDir(dir);
+  });
+
+  test("getAverageRating helper is exported", () => {
+    assert.ok(typeof getAverageRating === "function", "getAverageRating should be exported");
+  });
+
+  test("getAverageRating returns null for model with no ratings", async () => {
+    await setupTestEnvironment(dir);
+
+    const dna = loadModelDNA();
+    const avg = getAverageRating("nonexistent-model", dna);
+    assert.strictEqual(avg, null, "Should return null for model with no ratings");
+  });
+
+  test("getAverageRating calculates average correctly", async () => {
+    await setupTestEnvironment(dir);
+
+    // Record ratings
+    await handleRateModel({ modelRole: "executor", taskType: "codeExecution", rating: 5 });
+    await handleRateModel({ modelRole: "executor", taskType: "codeExecution", rating: 4 });
+    await handleRateModel({ modelRole: "executor", taskType: "codeExecution", rating: 3 });
+    clearCache();
+
+    const dna2 = loadModelDNA();
+    const avg = getAverageRating("executor", dna2);
+    assert.strictEqual(avg, 4, "Should calculate average as 4");
+  });
+});
+
 // Switch Model Tool Tests
 describe("switch-model tool", () => {
   let dir;

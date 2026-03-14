@@ -1255,9 +1255,71 @@ function checkRateLimit(clientId) {
 
 ---
 
+## Phase 4 Updates (Post-Implementation)
+
+### Critical Bugs Fixed
+1. **DNA Evolution Mutation Path Bug** - Fixed the `analyzeUsage()` function to properly iterate through `taskModelMapping` instead of trying to reverse lookup tasks by modelRole. This ensures evolution suggestions are generated correctly.
+
+2. **Streaming Handler Registration** - Removed the unregistered `handleExecuteStreamingTask()` function to avoid confusion. Only `handleExecuteTask()` is registered and used.
+
+3. **Field Naming Standardization** - Changed `fallbackAttempted` to `fallbackUsed` for consistency across all tool responses.
+
+### Error Handling Improvements
+4. **Custom Error Classes** - Created `src/utils/errors.js` with specific error types:
+   - `DNAUninitializedError` - Thrown when DNA is required but not initialized
+   - `ModelLoadFailedError` - Thrown when a model fails to load
+   - `ModelUnloadFailedError` - Thrown when a model fails to unload
+   - `InvalidParameterError` - Thrown for invalid parameters
+   - `RateLimitExceededError` - Thrown when rate limit is exceeded
+   - `TaskExecutionError` - Thrown when task execution fails
+   - `ModelNotAvailableError` - Thrown when a model is not available
+   - `EvolutionFailedError` - Thrown when DNA evolution fails
+   - `MemoryNotFoundError` - Thrown when trying to delete non-existent memory
+
+5. **Standardized Error Responses** - Created `src/utils/error-handler.js` with helper functions:
+   - `createErrorResponse()` - Standardized error response format
+   - `createInvalidParameterError()` - Error for invalid parameters
+   - `createDNAUninitializedError()` - Error for uninitialized DNA
+   - `createModelLoadError()` - Error for model load failures
+   - `createModelUnloadError()` - Error for model unload failures
+   - `createTaskExecutionError()` - Error for task execution failures
+   - `createGenericError()` - Generic error wrapper
+   - `withErrorHandling()` - Async function wrapper with error handling
+
+### Performance Optimizations
+6. **Request Caching** - Created `src/utils/tool-cache.js` with:
+   - 30-second TTL cache for tool results
+   - Cache invalidation on file changes
+   - Cache statistics and management functions
+   - `createCachedFunction()` wrapper for easy caching
+
+7. **Rate Limiting** - Created `src/utils/rate-limiter.js` with:
+   - Per-client rate limiting (10 requests per minute by default)
+   - Configurable limits and time windows
+   - Rate limit status tracking
+   - `createRateLimitedFunction()` wrapper for easy rate limiting
+
+8. **DNA Loading Optimization** - The existing `loadModelDNA()` function already implements:
+   - File modification time (mtime) caching
+   - Automatic cache invalidation on file changes
+   - Shared cache instance across all tools
+
+### Testing Updates
+9. **Enhanced Test Coverage** - Added tests in `tests/tools.test.js`:
+   - Helper function tests for `getAverageRating()`
+   - Tests for exported helper functions
+   - Tests for DNA evolution with mutations
+   - Tests for error handling scenarios
+
+### Documentation Updates
+10. **Updated Documentation** - This document now reflects:
+    - All critical bugs have been fixed
+    - Error handling utilities are available
+    - Performance optimizations are implemented
+    - Test coverage has been improved
+
 ## Future Enhancements
 
 - [ ] Tool usage analytics
-- [ ] Rate limiting per client
 - [ ] Tool timeouts and cancellation
 - [ ] Streaming responses for long-running operations

@@ -95,7 +95,7 @@ export async function handleExecuteTask(params) {
           query,
           modelUsed: result.modelUsed || null,
           classification: result.classification || null,
-          fallbackAttempted: result.fallbackAttempted || false,
+          fallbackUsed: result.fallbackAttempted || false,
           rating: result.rating || null,
           usage: result.result?.usage || result.result?.usage || null,
           error: result.error || null,
@@ -112,8 +112,3 @@ export async function handleExecuteTask(params) {
   }
 }
 
-/**
- * Handle streaming task execution
- * @param {Object} params - Tool parameters with query, modelType, and streaming options
- * @returns {Promise<Object>} Streaming task execution result
- */
