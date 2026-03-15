@@ -130,6 +130,16 @@ export const MODEL_DNA_SCHEMA = {
     properties: {
       enabled: { type: "boolean", description: "Enable LM Link device discovery and orchestration" },
       maxParallelRequests: { type: "number", description: "Global limit on concurrent requests across all devices" },
+      // New field: maxModelsPerDevice - default is 1 (one model per device by default)
+      maxModelsPerDevice: {
+        type: "object",
+        description: "Maximum number of models that can be loaded simultaneously on each device",
+        pattern: {
+          "^[a-z0-9-]+$": { type: "number", minimum: 1, maximum: 10 },
+        },
+      },
+      // Backwards compatibility: globalMaxModels (deprecated)
+      globalMaxModels: { type: "number", description: "DEPRECATED: Use maxModelsPerDevice instead" },
       perDeviceLimits: {
         type: "object",
         pattern: {
@@ -160,7 +170,7 @@ export const MODEL_DNA_SCHEMA = {
  */
 export function getDefaultDNA() {
   return {
-    version: 2,
+    version: 4,
     primaryRole: "conversationalist",
     models: {
       conversationalist: {
@@ -230,6 +240,8 @@ export function getDefaultDNA() {
     orchestratorConfig: {
       enabled: true,
       maxParallelRequests: 4,
+      // Default to empty object - hardware-based defaults will be used for actual limits
+      maxModelsPerDevice: {},
       perDeviceLimits: {},
       preferredDevices: [],
       autoLoadModels: true,
@@ -429,6 +441,29 @@ export function validateModelDNA(dna) {
           errors.push("orchestratorConfig.unloadAfterIdleMs must be a non-negative number");
         }
       }
+
+      // Validate maxModelsPerDevice
+      if (dna.orchestratorConfig.maxModelsPerDevice !== undefined && typeof dna.orchestratorConfig.maxModelsPerDevice !== "object") {
+        errors.push("orchestratorConfig.maxModelsPerDevice must be an object or undefined");
+      } else if (dna.orchestratorConfig.maxModelsPerDevice) {
+        for (const [deviceId, maxModels] of Object.entries(dna.orchestratorConfig.maxModelsPerDevice)) {
+          if (typeof deviceId !== "string") {
+            errors.push(`orchestratorConfig.maxModelsPerDevice key must be a string`);
+            continue;
+          }
+          if (typeof maxModels !== "number" || maxModels < 1 || maxModels > 10) {
+            errors.push(`orchestratorConfig.maxModelsPerDevice[${deviceId}] must be a number between 1 and 10`);
+          }
+        }
+      }
+
+      // Check deprecated globalMaxModels
+      if (dna.orchestratorConfig.globalMaxModels !== undefined) {
+        console.warn("[DNA] globalMaxModels is DEPRECATED - use maxModelsPerDevice instead");
+        if (typeof dna.orchestratorConfig.globalMaxModels !== "number" || dna.orchestratorConfig.globalMaxModels < 1) {
+          errors.push("orchestratorConfig.globalMaxModels must be a positive number");
+        }
+      }
     }
   }
 
@@ -508,6 +543,35 @@ const MIGRATIONS = {
 
     return migrated;
   },
+
+  // Version 3 -> 4: Add maxModelsPerDevice configuration
+  3: (dna) => {
+    const migrated = { ...dna, version: 4 };
+
+    // Add maxModelsPerDevice with default value of 1 if not present
+    if (!migrated.orchestratorConfig || !migrated.orchestratorConfig.maxModelsPerDevice) {
+      // Ensure orchestratorConfig exists
+      if (!migrated.orchestratorConfig) {
+        migrated.orchestratorConfig = {};
+      }
+      
+      // Set default maxModelsPerDevice to empty object (will use hardware-based defaults)
+      migrated.orchestratorConfig.maxModelsPerDevice = {};
+      
+      // If old globalMaxModels exists, apply it as a fallback
+      if (migrated.orchestratorConfig.globalMaxModels) {
+        console.log(`[DNA] Migrating globalMaxModels=${migrated.orchestratorConfig.globalMaxModels} to maxModelsPerDevice`);
+        migrated.orchestratorConfig.maxModelsPerDevice["*"] = migrated.orchestratorConfig.globalMaxModels;
+      }
+    }
+
+    // Remove deprecated globalMaxModels field
+    if (migrated.orchestratorConfig && migrated.orchestratorConfig.globalMaxModels !== undefined) {
+      delete migrated.orchestratorConfig.globalMaxModels;
+    }
+
+    return migrated;
+  },
 };
 
 /**
@@ -520,7 +584,7 @@ export function applyMigration(dna) {
     return dna;
   }
 
-  const currentVersion = 3; // Latest schema version
+  const currentVersion = 4; // Latest schema version (added maxModelsPerDevice)
   const sourceVersion = dna.version || 1;
   let migrated = { ...dna };
 
@@ -626,7 +690,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     taskModelMapping: {},
   };
   const migrated = applyMigration(oldDNA);
-  console.log("Migration v1->v2/v3:", migrated.version, "settings?", !!migrated.settings);
+  console.log("Migration v1->v2/v3/v4:", migrated.version, "settings?", !!migrated.settings);
 
   console.log("Schema module tests complete.");
 }

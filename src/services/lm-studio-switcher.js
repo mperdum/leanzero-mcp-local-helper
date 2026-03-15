@@ -4,7 +4,7 @@
  */
 
 import { hardwareDetector } from '../utils/hardware-detector.js';
-import { loadModelDNA, recordEffectivenessRating } from '../utils/model-dna-manager.js';
+import { loadModelDNA, recordEffectivenessRating, getMaxModelsPerDevice } from '../utils/model-dna-manager.js';
 
 export class LMStudioSwitcher {
   constructor() {
@@ -261,21 +261,30 @@ export class LMStudioSwitcher {
         }
       }
       
-      // Check hardware limits before loading
-      const parallelLimit = await hardwareDetector.getParallelLoadLimit();
+      // Check max models per device limit
+      const projectRoot = options.projectRoot || process.cwd();
+      const maxModelsPerDevice = await getMaxModelsPerDevice(null, projectRoot);
       const currentLoadedCount = this._loadedModels.size;
       
-      if (currentLoadedCount >= parallelLimit) {
-        // Need to unload a model first
-        console.warn(`[LMStudio] Parallel limit (${parallelLimit}) reached. Unloading oldest model.`);
+      console.log(`[LMStudio] Checking max models per device: ${maxModelsPerDevice} (current: ${currentLoadedCount})`);
+      
+      if (currentLoadedCount >= maxModelsPerDevice) {
+        // Need to unload a model first to stay within limit
+        console.warn(`[LMStudio] Max models per device (${maxModelsPerDevice}) reached. Unloading oldest loaded model.`);
         
         // Get oldest loaded model (FIFO) from cache
         if (this._loadedModels.size > 0) {
           const oldestEntry = this._loadedModels.values().next().value;
+          console.log(`[LMStudio] Unloading oldest model: ${oldestEntry.modelId} (instance: ${oldestEntry.instanceId})`);
+          
           const unloadResult = await this.unloadModel(oldestEntry.instanceId, false);
           if (!unloadResult.unloaded) {
             console.warn(`[LMStudio] Failed to unload oldest model: ${unloadResult.error || 'unknown error'}`);
+            // Continue with load attempt anyway - user may want to override
           }
+        } else {
+          // No models in cache but limit reached - this shouldn't happen, but be safe
+          console.warn(`[LMStudio] Max models reached but no loaded models in cache`);
         }
       }
       

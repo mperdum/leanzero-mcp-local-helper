@@ -88,7 +88,7 @@ describe("Model DNA Schema", () => {
     assert.strictEqual(validation.valid, true, "Minimal valid DNA should pass");
   });
 
-  test("applyMigration handles version 1 to 3 upgrade", () => {
+  test("applyMigration handles version 1 to 4 upgrade", () => {
     const oldDNA = {
       version: 1,
       primaryRole: "executor",
@@ -99,7 +99,7 @@ describe("Model DNA Schema", () => {
     };
 
     const migratedDNA = applyMigration(oldDNA);
-    assert.strictEqual(migratedDNA.version, 3, "Version should be upgraded to 3");
+    assert.strictEqual(migratedDNA.version, 4, "Version should be upgraded to 4");
     assert.ok("settings" in migratedDNA, "Should have settings field");
     assert.ok("hardwareProfile" in migratedDNA, "Should have hardwareProfile");
     assert.ok("fallbackStrategy" in migratedDNA, "Should have fallbackStrategy");
@@ -108,7 +108,7 @@ describe("Model DNA Schema", () => {
   test("applyMigration leaves current version unchanged", () => {
     const currentDNA = getDefaultDNA();
     const migratedDNA = applyMigration(currentDNA);
-    assert.strictEqual(migratedDNA.version, 3, "Current version should remain 3");
+    assert.strictEqual(migratedDNA.version, 4, "Current version should remain 4");
   });
 });
 

@@ -4,8 +4,9 @@
  * Provides DNA configuration management with CRUD operations for model selection and optimization.
  */
 
-import { loadModelDNA, createDNAFile, saveMemory, deleteMemory } from "../utils/model-dna-manager.js";
+import { loadModelDNA, createDNAFile, saveMemory, deleteMemory, getMaxModelsPerDevice } from "../utils/model-dna-manager.js";
 import { getDefaultDNA } from "../utils/model-dna-schema.js";
+import { hardwareDetector } from "../utils/hardware-detector.js";
 
 /**
  * Tool definition
@@ -20,18 +21,22 @@ export const modelDnaTool = {
     "  - 'get': Get current Model DNA configuration\n" +
     "  - 'save-memory': Save a memory (preference) for model selection\n" +
     "  - 'delete-memory': Delete a memory by key\n" +
-    "  - 'evolve': Analyze usage and suggest improvements (auto-apply with apply:true)\n\n" +
+    "  - 'evolve': Analyze usage and suggest improvements (auto-apply with apply:true)\n" +
+    "  - 'set-max-models': Set max models per device limit\n" +
+    "  - 'get-hardware-info': Get hardware detection info for model limits\n\n" +
     `[CONSTRAINTS]\n` +
     "  - DNA is stored in .model-dna.json\n" +
     "  - User-level overrides are stored in .model-user.json\n" +
-    "  - Memories persist across model switches for context\n\n" +
+    "  - Memories persist across model switches for context\n" +
+    "  - Max models per device defaults to: 1 (RAM<8GB), 2 (RAM<16GB), 3 (RAM<32GB), 4+ (RAM>=32GB)\n" +
+    "  - Set via DNA or environment variables (MAX_MODELS_PER_DEVICE, DEVICE_MAX_MODELS_<ID>)\n\n" +
     `[FORMAT] Returns JSON with success status and relevant data.`,
   inputSchema: {
     type: "object",
     properties: {
       action: {
         type: "string",
-        enum: ["init", "get", "save-memory", "delete-memory", "evolve"],
+        enum: ["init", "get", "save-memory", "delete-memory", "evolve", "set-max-models", "get-hardware-info"],
         description: "Action to perform"
       },
       companyName: {
@@ -53,6 +58,16 @@ export const modelDnaTool = {
       apply: {
         type: "boolean",
         description: "Auto-apply evolution suggestions (evolve only)"
+      },
+      maxModels: {
+        type: "number",
+        minimum: 1,
+        maximum: 10,
+        description: "Max models to allow per device (set-max-models only, default based on hardware)"
+      },
+      deviceId: {
+        type: "string",
+        description: "Device ID for specific limit (set-max-models only)"
       },
     },
     required: ["action"],
@@ -83,6 +98,12 @@ export async function handleModelDNA(params) {
 
       case "evolve":
         return await handleEvolveDNA(params);
+
+      case "set-max-models":
+        return await handleSetMaxModels(params);
+
+      case "get-hardware-info":
+        return await handleGetHardwareInfo(params);
 
       default:
         return {
@@ -377,4 +398,128 @@ function findBetterModelForTask(taskModelMapping, modelUsage, currentTaskType, c
 
   // Return the highest-rated good model, or null if none
   return goodModels.length > 0 ? goodModels[0][0] : null;
+}
+
+/**
+ * Set max models per device limit
+ * @param {Object} params - Tool parameters with maxModels and optional deviceId
+ * @returns {Promise<Object>} Set result
+ */
+async function handleSetMaxModels(params) {
+  const dna = loadModelDNA();
+
+  if (!dna) {
+    return {
+      content: [{
+        type: "text",
+        text: JSON.stringify({
+          success: false,
+          message: "Model DNA not initialized. Use model-dna action:'init' to create.",
+        }, null, 2),
+      }],
+    };
+  }
+
+  // Ensure orchestratorConfig exists
+  if (!dna.orchestratorConfig) {
+    dna.orchestratorConfig = {};
+  }
+  
+  if (!dna.orchestratorConfig.maxModelsPerDevice) {
+    dna.orchestratorConfig.maxModelsPerDevice = {};
+  }
+
+  const { maxModels, deviceId } = params;
+
+  // If deviceId provided, set per-device limit; otherwise set default for all devices
+  if (deviceId) {
+    // Validate device ID format
+    const isValidFormat = /^[a-z0-9-]+$/.test(deviceId);
+    
+    dna.orchestratorConfig.maxModelsPerDevice[deviceId] = maxModels || 1;
+    
+    return {
+      content: [{
+        type: "text",
+        text: JSON.stringify({
+          success: true,
+          deviceId,
+          maxModels: maxModels || 1,
+          message: `Max models for device '${deviceId}' set to ${maxModels || 1}`,
+          note: deviceId === "*" ? "This is the default limit for all devices without specific limits" : null,
+        }, null, 2),
+      }],
+    };
+  } else {
+    // Set wildcard/default limit
+    dna.orchestratorConfig.maxModelsPerDevice["*"] = maxModels || 1;
+    
+    return {
+      content: [{
+        type: "text",
+        text: JSON.stringify({
+          success: true,
+          defaultMaxModels: maxModels || 1,
+          message: `Default max models per device set to ${maxModels || 1}. Hardware defaults: 1 (RAM<8GB), 2 (RAM<16GB), 3 (RAM<32GB), 4+ (RAM>=32GB)`,
+        }, null, 2),
+      }],
+    };
+  }
+}
+
+/**
+ * Get hardware detection info for model limits
+ * @param {Object} params - Tool parameters (unused)
+ * @returns {Promise<Object>} Hardware info result
+ */
+async function handleGetHardwareInfo(params) {
+  const hwProfile = await hardwareDetector.getHardwareProfile();
+  const maxModelsPerDevice = await getMaxModelsPerDevice(null);
+
+  return {
+    content: [{
+      type: "text",
+      text: JSON.stringify({
+        success: true,
+        hardware: {
+          ramGB: hwProfile.ramGB,
+          tier: hwProfile.tier,
+          cpuCores: hwProfile.cpuCores,
+          platform: hwProfile.platform,
+          architecture: hwProfile.architecture,
+        },
+        maxModelsPerDevice: {
+          detected: maxModelsPerDevice,
+          recommendation: getMaxModelsRecommendation(hwProfile),
+          hardwareBasedLimit: hwProfile.maxModelsPerDevice || 1,
+        },
+        notes: [
+          "Max models per device is tunable via DNA configuration",
+          "Environment variables can override: MAX_MODELS_PER_DEVICE or DEVICE_MAX_MODELS_<ID>",
+          "Each loaded model consumes RAM - choose based on your hardware",
+        ],
+      }, null, 2),
+    }],
+  };
+}
+
+/**
+ * Get recommendation for max models based on hardware profile
+ * @param {Object} hwProfile - Hardware profile from detector
+ * @returns {string} Human-readable recommendation
+ */
+function getMaxModelsRecommendation(hwProfile) {
+  const { ramGB, tier } = hwProfile;
+
+  if (ramGB < 8) return "1 model recommended (limited RAM)";
+  if (ramGB < 16) return "2 models recommended";
+  if (ramGB < 32) return "3 models recommended";
+  
+  switch (tier) {
+    case 'low': return "1-2 models recommended";
+    case 'medium': return "2-3 models recommended";
+    case 'high': return "3-4 models recommended";
+    case 'ultra': return "Up to 6 models if RAM >= 64GB";
+    default: return "4+ models if sufficient RAM";
+  }
 }

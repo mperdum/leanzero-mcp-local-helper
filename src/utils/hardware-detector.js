@@ -250,6 +250,39 @@ export class HardwareDetector {
   }
 
   /**
+   * Get max models per device based on hardware
+   * Returns the maximum number of models that can be loaded simultaneously on a single device
+   * 
+   * DEFAULT BEHAVIOR: Always returns 1 model per device by default.
+   * Users must explicitly configure more via DNA or environment variables.
+   * This method provides the HARDWARE RECOMMENDATION, not the actual limit.
+   * The actual limit is controlled by orchestratorConfig.maxModelsPerDevice in DNA.
+   * 
+   * @param {string|null} deviceId - Optional specific device ID (null for default)
+   * @returns {Promise<number>} Hardware-based recommendation for max models per device
+   */
+  async getMaxModelsPerDevice(deviceId = null) {
+    const ramGB = await this.detectTotalRAM();
+    
+    // BASE DEFAULT: Always return 1 as the base recommendation
+    // Users must explicitly opt-in to more than 1 model per device
+    let maxModels = 1;
+    
+    // Hardware RECOMMENDATION (only used when user hasn't configured limit)
+    // This is not enforced, just informational for the UI/help text
+    if (ramGB >= 32) {
+      maxModels = 4; // High-end: 32GB+ RAM can comfortably run 4 models
+    } else if (ramGB >= 16) {
+      maxModels = 2; // Mid-range: 16-31GB can run 2 models
+    }
+    // <16GB stays at base default of 1
+    
+    console.log(`[Hardware] Max models per device: ${maxModels} (RAM: ${ramGB}GB, deviceId: ${deviceId || 'default'})`);
+    
+    return maxModels;
+  }
+
+  /**
    * Calculate optimal parallel loading limit based on hardware
    * @returns {Promise<number>} Maximum parallel model loads
    */
@@ -307,6 +340,7 @@ export class HardwareDetector {
     const tier = await this.getHardwareTier();
     const parallelLimit = await this.getParallelLoadLimit();
     const maxModelSize = await this.getMaxModelSize();
+    const maxModelsPerDevice = await this.getMaxModelsPerDevice();
     
     // Get CPU cores using os module
     let cpuCores = 0;
@@ -323,6 +357,7 @@ export class HardwareDetector {
       tier,
       parallelLoadLimit: parallelLimit,
       maxModelSize,
+      maxModelsPerDevice,
       cpuCores,
       platform: process.platform,
       architecture: process.arch,

@@ -10,13 +10,58 @@ MCP Local Helper is a sophisticated intelligent model management system that pro
 2. **Task Decomposition & Parallel Execution** - Breaks complex tasks into parallelizable subtasks using DAG-based scheduling
 3. **Multi-Device Orchestration (LM Link)** - Distributed execution across multiple devices connected via Tailscale mesh VPN
 4. **Load-Aware Dispatching** - Routes tasks to least-loaded devices with appropriate hardware tiers
-5. **Automatic Evolution** - Continuously improves configuration based on usage patterns and effectiveness ratings
+5. **Model Load Management** - Enforces per-device model limits (default: 1) to optimize memory usage
+6. **Automatic Evolution** - Continuously improves configuration based on usage patterns and effectiveness ratings
+
+### Model Load Management (New in v2)
+
+**Overview:**
+MCP Local Helper now includes fine-grained model load control to optimize memory usage on resource-constrained systems. By default, only **1 model per device** can be loaded at a time.
+
+**Key Features:**
+- **Conservative Default**: 1 model per device (prevents memory exhaustion)
+- **Hardware Detection**: Automatically detects RAM/CPU for recommendations
+- **Tunable**: Override via DNA configuration or environment variables
+- **Auto-Eviction**: When limit reached, oldest model is automatically unloaded
+
+**Configuration Options:**
+
+| Method | Example |
+|--------|---------|
+| DNA Config | `"maxModelsPerDevice": {"*": 3}` |
+| Per Device | `"device-local": 2` |
+| Environment | `MAX_MODELS_PER_DEVICE=3` |
+
+**Hardware Recommendations** (when not explicitly configured):
+- < 8GB RAM: **1 model** (conservative)
+- 8-15GB RAM: **1 model** (default for safety)
+- 16-31GB RAM: **2 models** (recommended)
+- 32GB+ RAM: **4 models** (high-end)
+
+**How It Works:**
+1. Check DNA's `orchestratorConfig.maxModelsPerDevice` configuration
+2. Fall back to hardware-based detection via `getMaxModelsPerDevice()`
+3. Unload oldest model (FIFO) when limit is exceeded
+4. Per-device limits allow heterogeneous multi-machine setups
+
+**DNA Schema:**
+```json
+{
+  "orchestratorConfig": {
+    "maxModelsPerDevice": {
+      "*": 3,
+      "device-local": 2,
+      "device-12345678": 4
+    }
+  }
+}
+```
 
 ### Architecture Phases
 
 | Phase | Status | Description |
 |-------|--------|-------------|
-| Phase 1 | ✅ Complete | Core DNA System - Configuration management with schema validation and inheritance |
+| Phase 1 | ✅ Complete | Core DNA System - Configuration management, max models per device limits, hardware detection |
 | Phase 2 | ✅ Complete | Model Switching Service - LM Studio integration for model lifecycle management |
 | Phase 3 | ✅ Complete | Task Dispatcher - Intelligent task classification and routing with fallback mechanisms |
 | Phase 4 | ✅ Complete | Tools Implementation - MCP server exposing four core tools for client interaction |
@@ -651,6 +696,15 @@ Configure behavior through environment variables:
 | MAX_HISTORY_ITEMS | 100 | Max evolution history entries |
 | CONTEXT_MAX_TOKENS | 8000 | Tokens preserved during model switches |
 | DEVICE_DISCOVERY_INTERVAL_MS | 30000ms | How often to scan for new devices |
+
+### Model Load Management Settings
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| MAX_MODELS_PER_DEVICE | 1 | Global max models per device (default: 1 for safety) |
+| DEVICE_MAX_MODELS_* | - | Per-device limit override (e.g., `DEVICE_MAX_MODELS_LOCAL`) |
+| MAX_PARALLEL_REQUESTS_GLOBAL | 4 | Max concurrent requests on local device |
+| DEFAULT_DEVICE_CONCURRENT_LIMIT | 2 | Max concurrent requests on remote devices |
 
 ---
 

@@ -614,6 +614,72 @@ import {
   saveDNAToFile,
 } from "./model-dna-schema.js";
 
+// Hardware detector import
+import { hardwareDetector } from "./hardware-detector.js";
+
+/**
+ * Get effective max models per device for a given device ID
+ * Combines hardware-based defaults with user DNA overrides
+ * @param {string|null} deviceId - Device ID (null for default)
+ * @param {string|null} projectRoot - Project root directory
+ * @returns {Promise<number>} Maximum models allowed on this device
+ */
+export async function getMaxModelsPerDevice(deviceId = null, projectRoot) {
+  // Load DNA configuration
+  const dna = loadModelDNA(projectRoot);
+  
+  // Get hardware-based default
+  const hwMaxModels = await hardwareDetector.getMaxModelsPerDevice(deviceId);
+  
+  // Check for user override in DNA
+  let maxModels = hwMaxModels;
+  
+  if (dna?.orchestratorConfig) {
+    // First check specific device limit
+    if (dna.orchestratorConfig.maxModelsPerDevice && deviceId) {
+      const specificLimit = dna.orchestratorConfig.maxModelsPerDevice[deviceId];
+      if (specificLimit !== undefined) {
+        maxModels = specificLimit;
+      }
+    }
+    
+    // If no specific limit, check global default for all devices
+    if (maxModels === hwMaxModels && dna.orchestratorConfig.maxModelsPerDevice) {
+      const wildcardLimit = dna.orchestratorConfig.maxModelsPerDevice["*"];
+      if (wildcardLimit !== undefined) {
+        maxModels = wildcardLimit;
+      }
+    }
+  }
+  
+  // Also check environment variable for user override
+  const envMaxModels = process.env.MAX_MODELS_PER_DEVICE;
+  if (envMaxModels) {
+    const parsed = parseInt(envMaxModels, 10);
+    if (!isNaN(parsed) && parsed >= 1 && parsed <= 10) {
+      maxModels = parsed;
+    }
+  }
+  
+  // Also check device-specific environment variable
+  if (deviceId) {
+    const envDeviceLimit = process.env[`DEVICE_MAX_MODELS_${deviceId.toUpperCase().replace(/-/g, '_')}`];
+    if (envDeviceLimit) {
+      const parsed = parseInt(envDeviceLimit, 10);
+      if (!isNaN(parsed) && parsed >= 1 && parsed <= 10) {
+        maxModels = parsed;
+      }
+    }
+  }
+  
+  // Clamp to valid range
+  maxModels = Math.max(1, Math.min(10, maxModels));
+  
+  console.log(`[DNA] Max models per device '${deviceId || 'default'}': ${maxModels} (hw: ${hwMaxModels}, dna: ${dna?.orchestratorConfig?.maxModelsPerDevice ? 'override' : 'none'})`);
+  
+  return maxModels;
+}
+
 // Self-test when run directly
 if (import.meta.url === `file://${process.argv[1]}`) {
   console.log("Testing DNA Manager module...");
