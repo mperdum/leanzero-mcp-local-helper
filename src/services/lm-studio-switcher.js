@@ -1045,3 +1045,214 @@ export function resetLMStudioSwitcher() {
   lmStudioSwitcher._connectionError = null;
   _initialized = false;
 }
+
+// ============================================================================
+// Device-Aware Extension Methods
+// These methods support multi-device orchestration via LM Link
+// 
+// ARCHITECTURE NOTE: LM Link uses a single localhost:1234 endpoint for ALL devices.
+// Remote models are accessed by their model key - the Tailscale mesh handles routing.
+// These extension methods provide convenience abstractions for device/model grouping.
+// ============================================================================
+
+/**
+ * Get models grouped by device
+ * Parses the /api/v1/models response to group models by their hosting device.
+ * 
+ * ARCHITECTURE: In LM Link, all devices communicate via localhost:1234. This method
+ * helps identify which models are loaded on which logical devices based on metadata
+ * (tailscale_node_id). Used for display purposes and tracking model distribution.
+ * 
+ * @returns {Promise<Object>} Object mapping deviceId -> ModelInstance[]
+ */
+async function getModelsByDevice() {
+  const models = await this.getAvailableModels();
+  
+  if (!Array.isArray(models) || models.length === 0) {
+    return {};
+  }
+
+  // Group models by device ID from metadata
+  const devices = {};
+
+  for (const model of models) {
+    // Extract device info from model metadata
+    let deviceId;
+    
+    if (model.metadata?.tailscale_node_id) {
+      deviceId = 'device-' + String(model.metadata.tailscale_node_id).substring(0, 8);
+    } else if (model.metadata?.device_info?.id) {
+      deviceId = 'device-' + String(model.metadata.device_info.id).substring(0, 8);
+    } else {
+      // Default to local device
+      deviceId = 'device-local';
+    }
+
+    if (!devices[deviceId]) {
+      devices[deviceId] = [];
+    }
+
+    // Build model instance for this device
+    const loadedInstances = model.loaded_instances || [];
+    
+    for (const instance of loadedInstances) {
+      devices[deviceId].push({
+        modelKey: model.key,
+        displayName: model.display_name,
+        deviceId,
+        instanceId: instance.id,
+        state: 'loaded',
+        loadTimeSeconds: model.load_time_seconds,
+        sizeGB: model.size_gb,
+        capabilities: {
+          vision: !!model.capabilities?.vision || false,
+          toolUse: !!model.capabilities?.trained_for_tool_use || false,
+          maxContextLength: model.context_length || 8192,
+        },
+      });
+    }
+
+    // If no loaded instances, still add as unloaded
+    if (loadedInstances.length === 0) {
+      devices[deviceId].push({
+        modelKey: model.key,
+        displayName: model.display_name,
+        deviceId,
+        state: 'unloaded',
+        loadTimeSeconds: model.load_time_seconds,
+        sizeGB: model.size_gb,
+        capabilities: {
+          vision: !!model.capabilities?.vision || false,
+          toolUse: !!model.capabilities?.trained_for_tool_use || false,
+          maxContextLength: model.context_length || 8192,
+        },
+      });
+    }
+  }
+
+  return devices;
+}
+
+/**
+ * Load model on a specific device (for remote device orchestration)
+ * 
+ * ARCHITECTURE: LM Link exposes all models via localhost:1234. This method
+ * loads the model on the local LM Studio instance. The model becomes available
+ * across ALL connected devices in the LM Link network.
+ * 
+ * @param {string} modelKey - Model identifier (the key from LM Studio)
+ * @param {Object} options - Loading options
+ * @param {string} [options.deviceId] - Target device ID (placeholder for consistency)
+ * @returns {Promise<LoadResult>} Load result
+ */
+async function loadModelOnDevice(modelKey, options = {}) {
+  const { deviceId } = options;
+  
+  console.log(`[LMStudio] Loading model ${modelKey} on LM Link network`);
+  
+  try {
+    // In LM Link, models are loaded locally and become available to all devices
+    const loadResult = await this.loadModel(modelKey);
+    
+    return {
+      ...loadResult,
+      deviceId: deviceId || 'device-local',
+    };
+    
+  } catch (error) {
+    console.error(`[LMStudio] Failed to load ${modelKey}:`, error.message);
+    
+    return {
+      loaded: false,
+      modelId: modelKey,
+      deviceId: options.deviceId || 'device-local',
+      error: error.message,
+    };
+  }
+}
+
+/**
+ * Execute completion on a specific device
+ * 
+ * ARCHITECTURE: In LM Link, all API calls go to localhost:1234. Remote devices
+ * are accessed by specifying the model key that's loaded on that device.
+ * This method simply executes the completion - the modelKey identifies which
+ * device's model to use (via Tailscale routing).
+ * 
+ * @param {string} modelKey - Model identifier (the key identifies which device's model)
+ * @param {Array|string} input - Chat input
+ * @param {Object} options - Generation options
+ * @param {string} [options.deviceId] - Target device ID (placeholder for consistency)
+ * @returns {Promise<CompletionResult>} Completion result
+ */
+async function executeChatCompletionOnDevice(modelKey, input, options = {}) {
+  const { deviceId } = options;
+  
+  console.log(`[LMStudio] Executing ${modelKey} on LM Link network`);
+  
+  try {
+    // All API calls go to localhost:1234 in LM Link
+    // The model key identifies which device's model should process the request
+    const result = await this.executeChatCompletion(modelKey, input, options);
+    
+    return {
+      ...result,
+      deviceId: deviceId || 'device-local',
+    };
+    
+  } catch (error) {
+    console.error(`[LMStudio] Completion failed for ${modelKey}:`, error.message);
+    
+    return {
+      success: false,
+      modelId: modelKey,
+      deviceId: options.deviceId || 'device-local',
+      error: error.message,
+    };
+  }
+}
+
+/**
+ * Check connectivity to a remote device
+ * 
+ * ARCHITECTURE: In LM Link, all devices share the localhost:1234 endpoint via Tailscale.
+ * This method checks if the local LM Studio connection is healthy - which implies
+ * all connected devices in the network are accessible.
+ * 
+ * @param {string} deviceId - Device identifier (ignored for remote devices)
+ * @returns {Promise<Object>} Connectivity result with latency
+ */
+async function checkRemoteDevice(deviceId) {
+  // For LM Link, we only need to check the local connection
+  // All devices share localhost:1234 via Tailscale mesh
+  const startTime = Date.now();
+
+  try {
+    // Check if we can reach LM Studio API
+    const connected = await this.checkConnection();
+    
+    return {
+      connected,
+      latencyMs: connected ? (Date.now() - startTime) : null,
+      address: 'localhost:1234', // All devices share this endpoint
+    };
+
+  } catch (error) {
+    console.error(`[LMStudio] Failed to check connectivity for ${deviceId}:`, error.message);
+    
+    return {
+      connected: false,
+      latencyMs: null,
+      address: 'localhost:1234',
+      error: error.message,
+    };
+  }
+}
+
+// Export extension methods
+export const deviceAwareMethods = {
+  getModelsByDevice,
+  loadModelOnDevice,
+  executeChatCompletionOnDevice,
+  checkRemoteDevice,
+};

@@ -122,6 +122,36 @@ export const MODEL_DNA_SCHEMA = {
       maxAttempts: { type: "number" },
     },
   },
+  orchestratorConfig: {
+    type: "object",
+    required: false,
+    default: {},
+    description: "LM Link Multi-Device Orchestrator configuration",
+    properties: {
+      enabled: { type: "boolean", description: "Enable LM Link device discovery and orchestration" },
+      maxParallelRequests: { type: "number", description: "Global limit on concurrent requests across all devices" },
+      perDeviceLimits: {
+        type: "object",
+        pattern: {
+          "^[a-z0-9-]+$": {
+            type: "object",
+            properties: {
+              maxConcurrent: { type: "number", description: "Max concurrent requests for this device" },
+              cooldownMs: { type: "number", description: "Cooldown period between requests in ms" },
+              dailyRequestLimit: { type: "number", description: "Daily request limit" },
+            },
+          },
+        },
+      },
+      preferredDevices: {
+        type: "array",
+        items: { type: "string" },
+        description: "Priority order for device selection",
+      },
+      autoLoadModels: { type: "boolean", description: "Auto-load models on remote devices when needed" },
+      unloadAfterIdleMs: { type: "number", description: "Time in ms before auto-unloading idle models" },
+    },
+  },
 };
 
 /**
@@ -196,6 +226,14 @@ export function getDefaultDNA() {
       autoFallback: true,
       ratingThreshold: 3.0,
       maxAttempts: 3,
+    },
+    orchestratorConfig: {
+      enabled: true,
+      maxParallelRequests: 4,
+      perDeviceLimits: {},
+      preferredDevices: [],
+      autoLoadModels: true,
+      unloadAfterIdleMs: 120000,
     },
   };
 }
@@ -322,6 +360,76 @@ export function validateModelDNA(dna) {
   // Validate fallbackStrategy if present
   if (dna.fallbackStrategy !== undefined && typeof dna.fallbackStrategy !== "object") {
     errors.push("fallbackStrategy must be an object or undefined");
+  }
+
+  // Validate orchestratorConfig if present
+  if (dna.orchestratorConfig !== undefined) {
+    if (typeof dna.orchestratorConfig !== "object" || Array.isArray(dna.orchestratorConfig)) {
+      errors.push("orchestratorConfig must be an object or undefined");
+    } else {
+      // Validate enabled field
+      if (dna.orchestratorConfig.enabled !== undefined && typeof dna.orchestratorConfig.enabled !== "boolean") {
+        errors.push("orchestratorConfig.enabled must be a boolean");
+      }
+      
+      // Validate maxParallelRequests
+      if (dna.orchestratorConfig.maxParallelRequests !== undefined) {
+        if (typeof dna.orchestratorConfig.maxParallelRequests !== "number" || dna.orchestratorConfig.maxParallelRequests < 1) {
+          errors.push("orchestratorConfig.maxParallelRequests must be a positive number");
+        }
+      }
+
+      // Validate perDeviceLimits
+      if (dna.orchestratorConfig.perDeviceLimits !== undefined && typeof dna.orchestratorConfig.perDeviceLimits !== "object") {
+        errors.push("orchestratorConfig.perDeviceLimits must be an object");
+      } else if (dna.orchestratorConfig.perDeviceLimits) {
+        for (const [deviceId, limit] of Object.entries(dna.orchestratorConfig.perDeviceLimits)) {
+          if (typeof deviceId !== "string") {
+            errors.push(`orchestratorConfig.perDeviceLimits key must be a string`);
+            continue;
+          }
+          if (typeof limit !== "object" || Array.isArray(limit)) {
+            errors.push(`orchestratorConfig.perDeviceLimits[${deviceId}] must be an object`);
+            continue;
+          }
+          if (limit.maxConcurrent !== undefined && (typeof limit.maxConcurrent !== "number" || limit.maxConcurrent < 1)) {
+            errors.push(`orchestratorConfig.perDeviceLimits[${deviceId}].maxConcurrent must be a positive number`);
+          }
+          if (limit.cooldownMs !== undefined && (typeof limit.cooldownMs !== "number" || limit.cooldownMs < 0)) {
+            errors.push(`orchestratorConfig.perDeviceLimits[${deviceId}].cooldownMs must be a non-negative number`);
+          }
+          if (limit.dailyRequestLimit !== undefined && (typeof limit.dailyRequestLimit !== "number" || limit.dailyRequestLimit < 1)) {
+            errors.push(`orchestratorConfig.perDeviceLimits[${deviceId}].dailyRequestLimit must be a positive number`);
+          }
+        }
+      }
+
+      // Validate preferredDevices
+      if (dna.orchestratorConfig.preferredDevices !== undefined) {
+        if (!Array.isArray(dna.orchestratorConfig.preferredDevices)) {
+          errors.push("orchestratorConfig.preferredDevices must be an array");
+        } else {
+          for (const device of dna.orchestratorConfig.preferredDevices) {
+            if (typeof device !== "string") {
+              errors.push("orchestratorConfig.preferredDevices items must be strings");
+              break;
+            }
+          }
+        }
+      }
+
+      // Validate autoLoadModels
+      if (dna.orchestratorConfig.autoLoadModels !== undefined && typeof dna.orchestratorConfig.autoLoadModels !== "boolean") {
+        errors.push("orchestratorConfig.autoLoadModels must be a boolean");
+      }
+
+      // Validate unloadAfterIdleMs
+      if (dna.orchestratorConfig.unloadAfterIdleMs !== undefined) {
+        if (typeof dna.orchestratorConfig.unloadAfterIdleMs !== "number" || dna.orchestratorConfig.unloadAfterIdleMs < 0) {
+          errors.push("orchestratorConfig.unloadAfterIdleMs must be a non-negative number");
+        }
+      }
+    }
   }
 
   return {

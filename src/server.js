@@ -28,6 +28,11 @@ import { executeTaskTool, handleExecuteTask } from "./tools/execute-task.js";
 import { modelDnaTool, handleModelDNA } from "./tools/model-dna-tool.js";
 import { rateModelTool, handleRateModel } from "./tools/rate-model.js";
 
+// Import orchestration tools
+import { orchestrateTaskTool, handleOrchestrateTask } from "./tools/orchestrate-task.js";
+import { listDevicesTool, handleListDevices } from "./tools/list-devices.js";
+import { dispatchSubtaskTool, handleDispatchSubtask } from "./tools/dispatch-subtask.js";
+
 // Import core services for initialization
 import { lmStudioSwitcher } from "./services/lm-studio-switcher.js";
 
@@ -35,9 +40,9 @@ import { lmStudioSwitcher } from "./services/lm-studio-switcher.js";
  * MCP Server Configuration
  */
 const SERVER_CONFIG = {
-  name: "mcp-model-switcher",
+  name: "mcp-lm-link-orchestrator",
   version: "1.0.0",
-  description: "Intelligent model switching and task execution for LM Studio",
+  description: "Multi-device orchestration across LM Link connected devices via Tailscale mesh VPN",
   vendor: "LeanZero MCP",
   license: "MIT",
 };
@@ -155,6 +160,55 @@ function registerTools(server) {
       handleRateModel({ modelRole, taskType, rating, feedback })
   );
 
+  // Register orchestrate-task tool (multi-device orchestration)
+  server.registerTool(
+    "orchestrate-task",
+    {
+      title: "Orchestrate Multi-Device Task",
+      description: orchestrateTaskTool.description,
+      inputSchema: z.object({
+        task: z.string().describe("The complex task to orchestrate across devices"),
+        maxSubtasks: z.number().min(1).max(20).optional(),
+        requiredCapabilities: z.array(z.string()).optional(),
+      }),
+    },
+    async ({ task, maxSubtasks, requiredCapabilities }) =>
+      handleOrchestrateTask({ task, maxSubtasks, requiredCapabilities })
+  );
+
+  // Register list-devices tool
+  server.registerTool(
+    "list-devices",
+    {
+      title: "List Connected Devices",
+      description: listDevicesTool.description,
+      inputSchema: z.object({
+        includeLoadStats: z.boolean().optional(),
+        filterByCapability: z.enum(["vision", "toolUse"]).optional(),
+      }),
+    },
+    async ({ includeLoadStats, filterByCapability }) =>
+      handleListDevices({ includeLoadStats, filterByCapability })
+  );
+
+  // Register dispatch-subtask tool
+  server.registerTool(
+    "dispatch-subtask",
+    {
+      title: "Dispatch Single Subtask (Debugging)",
+      description: dispatchSubtaskTool.description,
+      inputSchema: z.object({
+        prompt: z.string().describe("The task/prompt to execute"),
+        deviceId: z.string().optional(),
+        modelKey: z.string().optional(),
+        taskType: z.enum(["research", "code-generation", "analysis", "synthesis"]).optional(),
+        priority: z.number().min(1).max(5).optional(),
+      }),
+    },
+    async ({ prompt, deviceId, modelKey, taskType, priority }) =>
+      handleDispatchSubtask({ prompt, deviceId, modelKey, taskType, priority })
+  );
+
   console.log("[MCP-Server] Tools registered successfully");
 }
 
@@ -197,6 +251,19 @@ async function shutdownServices() {
       console.log("[MCP-Server] LM Studio switcher shut down");
     }
 
+    // Shutdown orchestration services
+    const { taskOrchestrator, loadTracker, deviceRegistry } = await import("./services/orchestrator.js");
+    
+    if (taskOrchestrator) {
+      taskOrchestrator.shutdown();
+      console.log("[MCP-Server] Task orchestrator shut down");
+    }
+    
+    if (loadTracker && typeof loadTracker.shutdown === "function") {
+      loadTracker.shutdown();
+      console.log("[MCP-Server] Load tracker shut down");
+    }
+
     // Additional cleanup if needed:
     // - Close database connections
     // - Flush logs
@@ -218,9 +285,20 @@ async function main() {
     setupSignalHandlers(server);
 
     // Initialize core services (optional - services will auto-initialize on first use)
-    // Uncomment to pre-initialize LM Studio connection on startup:
-    // import { initializeLMStudioSwitcher } from "./services/lm-studio-switcher.js";
-    // await initializeLMStudioSwitcher();
+    import("./services/lm-studio-switcher.js").then(({ initializeLMStudioSwitcher }) => {
+      initializeLMStudioSwitcher();
+    });
+
+    // Import and initialize orchestration services
+    Promise.all([
+      import("./services/orchestrator.js"),
+      import("./services/load-tracker.js"),
+      import("./services/device-registry.js")
+    ]).then(([orchMod, loadMod, devMod]) => {
+      if (orchMod.initializeOrchestrator) {
+        orchMod.initializeOrchestrator();
+      }
+    });
 
     // Create transport (stdio for MCP)
     const transport = new StdioServerTransport();
@@ -244,5 +322,4 @@ if (import.meta.url === `file://${process.argv[1]}`) {
 }
 
 // Export for testing and programmatic usage
-export { createServer, main };
-export default server;
+export { createServer, main, shutdownServices };
