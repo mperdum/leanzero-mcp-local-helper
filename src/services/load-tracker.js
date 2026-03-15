@@ -434,3 +434,119 @@ export async function initializeLoadTracker() {
 export function resetLoadTracker() {
   loadTracker.shutdown();
 }
+
+// ============================================================================
+// SWARM-Specific Methods
+// ============================================================================
+
+/**
+ * Get devices available for lightweight model dispatch (SWARM research)
+ * @param {Object} options - Options
+ * @param {string[]} [options.lightweightModelIds] - IDs of lightweight models
+ * @returns {Promise<Array<{ device: DeviceInfo, maxLightweightModels: number }>>} Available devices
+ */
+LoadTracker.prototype.getAvailableDevicesForSwarm = async function(options = {}) {
+  const availableDevices = [];
+  
+  const onlineDevices = deviceRegistry.getOnlineDevices();
+  
+  // Import guardrails to check memory requirements
+  let swarmGuardrails;
+  try {
+    const { getFreeMemoryGB, getMaxConcurrentLightweightModels } = await import('../utils/swarm-guardrails.js');
+    const freeMemoryGB = await getFreeMemoryGB();
+    
+    if (freeMemoryGB < 8) {
+      console.warn(`[LoadTracker] Insufficient memory for SWARM: ${freeMemoryGB}GB available`);
+      return [];
+    }
+    
+    const maxModelsPerDevice = await getMaxConcurrentLightweightModels();
+    
+    for (const device of onlineDevices) {
+      // Check if device can accept lightweight models
+      if (!deviceRegistry.canLoadModel(device.id, options.lightweightModelIds?.[0] || null)) {
+        continue;
+      }
+      
+      availableDevices.push({
+        device,
+        maxLightweightModels: Math.min(
+          maxModelsPerDevice,
+          Math.floor(freeMemoryGB / 5.6) // Estimate based on 5.6GB model size
+        ),
+      });
+    }
+  } catch (error) {
+    console.warn(`[LoadTracker] SWARM device discovery failed: ${error.message}`);
+    
+    // Fallback to basic device discovery without guardrails
+    for (const device of onlineDevices) {
+      availableDevices.push({
+        device,
+        maxLightweightModels: 2, // Conservative default
+      });
+    }
+  }
+  
+  return availableDevices;
+};
+
+/**
+ * Check if a device can accept a SWARM lightweight model request
+ * @param {string} deviceId - Device identifier
+ * @returns {{ allowed: boolean, reason?: string }} Check result
+ */
+LoadTracker.prototype.canAcceptSwarmRequest = function(deviceId) {
+  // Get device limit for swarm requests
+  const deviceLimit = this._getDeviceConcurrentLimit(deviceId);
+  
+  // For now, allow 1 lightweight model per device for SWARM (conservative)
+  const maxLightweightPerDevice = Math.min(2, deviceLimit);
+  
+  // Count current lightweight models on this device
+  let activeLightweight = 0;
+  for (const [key, state] of this.loadStates.entries()) {
+    if (state.deviceId === deviceId && state.activeRequests > 0) {
+      activeLightweight++;
+    }
+  }
+  
+  if (activeLightweight >= maxLightweightPerDevice) {
+    return { 
+      allowed: false, 
+      reason: `Max lightweight models (${maxLightweightPerDevice}) already loaded on device ${deviceId}` 
+    };
+  }
+  
+  return { allowed: true, activeLightweight, maxLightweightPerDevice };
+};
+
+/**
+ * Record start of a SWARM lightweight model request
+ * @param {string} deviceId - Device identifier
+ * @param {string} modelKey - Model key being loaded
+ * @returns {Object} Updated load state
+ */
+LoadTracker.prototype.recordSwarmRequestStart = function(deviceId, modelKey) {
+  return this.recordRequestStart(deviceId, modelKey);
+};
+
+/**
+ * Record end of a SWARM lightweight model request
+ * @param {string} deviceId - Device identifier
+ * @param {string} modelKey - Model key that completed
+ * @param {boolean} success - Whether the request succeeded
+ * @returns {Object} Updated load state
+ */
+LoadTracker.prototype.recordSwarmRequestEnd = function(deviceId, modelKey, success) {
+  return this.recordRequestEnd(deviceId, modelKey, success);
+};
+
+// Export helper functions for direct use
+export const swarmLoadTracking = {
+  getAvailableDevicesForSwarm,
+  canAcceptSwarmRequest,
+  recordSwarmRequestStart,
+  recordSwarmRequestEnd,
+};

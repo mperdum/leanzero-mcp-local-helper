@@ -122,46 +122,94 @@ export const MODEL_DNA_SCHEMA = {
       maxAttempts: { type: "number" },
     },
   },
-  orchestratorConfig: {
-    type: "object",
-    required: false,
-    default: {},
-    description: "LM Link Multi-Device Orchestrator configuration",
-    properties: {
-      enabled: { type: "boolean", description: "Enable LM Link device discovery and orchestration" },
-      maxParallelRequests: { type: "number", description: "Global limit on concurrent requests across all devices" },
-      // New field: maxModelsPerDevice - default is 1 (one model per device by default)
-      maxModelsPerDevice: {
+      orchestratorConfig: {
         type: "object",
-        description: "Maximum number of models that can be loaded simultaneously on each device",
-        pattern: {
-          "^[a-z0-9-]+$": { type: "number", minimum: 1, maximum: 10 },
-        },
-      },
-      // Backwards compatibility: globalMaxModels (deprecated)
-      globalMaxModels: { type: "number", description: "DEPRECATED: Use maxModelsPerDevice instead" },
-      perDeviceLimits: {
-        type: "object",
-        pattern: {
-          "^[a-z0-9-]+$": {
+        required: false,
+        default: {},
+        description: "LM Link Multi-Device Orchestrator configuration",
+        properties: {
+          enabled: { type: "boolean", description: "Enable LM Link device discovery and orchestration" },
+          maxParallelRequests: { type: "number", description: "Global limit on concurrent requests across all devices" },
+          // New field: maxModelsPerDevice - default is 1 (one model per device by default)
+          maxModelsPerDevice: {
             type: "object",
+            description: "Maximum number of models that can be loaded simultaneously on each device",
+            pattern: {
+              "^[a-z0-9-]+$": { type: "number", minimum: 1, maximum: 10 },
+            },
+          },
+          // Backwards compatibility: globalMaxModels (deprecated)
+          globalMaxModels: { type: "number", description: "DEPRECATED: Use maxModelsPerDevice instead" },
+          perDeviceLimits: {
+            type: "object",
+            pattern: {
+              "^[a-z0-9-]+$": {
+                type: "object",
+                properties: {
+                  maxConcurrent: { type: "number", description: "Max concurrent requests for this device" },
+                  cooldownMs: { type: "number", description: "Cooldown period between requests in ms" },
+                  dailyRequestLimit: { type: "number", description: "Daily request limit" },
+                },
+              },
+            },
+          },
+          preferredDevices: {
+            type: "array",
+            items: { type: "string" },
+            description: "Priority order for device selection",
+          },
+          autoLoadModels: { type: "boolean", description: "Auto-load models on remote devices when needed" },
+          unloadAfterIdleMs: { type: "number", description: "Time in ms before auto-unloading idle models" },
+          // SWARM Orchestrator Configuration
+          swarm: {
+            type: "object",
+            required: false,
+            description: "SWARM Research Orchestration configuration",
             properties: {
-              maxConcurrent: { type: "number", description: "Max concurrent requests for this device" },
-              cooldownMs: { type: "number", description: "Cooldown period between requests in ms" },
-              dailyRequestLimit: { type: "number", description: "Daily request limit" },
+              enabled: { type: "boolean", description: "Enable SWARM orchestration for research tasks" },
+              maxLightweightModelsPerDevice: {
+                type: "number",
+                minimum: 1,
+                maximum: 8,
+                default: 2,
+                description: "Maximum concurrent lightweight models per device"
+              },
+              subtaskMaxTokens: {
+                type: "number",
+                minimum: 1000,
+                maximum: 8000,
+                default: 4000,
+                description: "Maximum tokens for each research subtask result"
+              },
+              finalAggregationMaxTokens: {
+                type: "number",
+                minimum: 2000,
+                maximum: 16000,
+                default: 8000,
+                description: "Maximum tokens for final aggregated response"
+              },
+              minMemoryGB: {
+                type: "number",
+                minimum: 4,
+                default: 8,
+                description: "Minimum free memory in GB to start SWARM operations"
+              },
+              maxSubtasks: {
+                type: "number",
+                minimum: 1,
+                maximum: 32,
+                default: 8,
+                description: "Maximum number of parallel research bots"
+              },
+              fallbackEnabled: {
+                type: "boolean",
+                default: true,
+                description: "Fall back to main models if lightweight models unavailable"
+              },
             },
           },
         },
       },
-      preferredDevices: {
-        type: "array",
-        items: { type: "string" },
-        description: "Priority order for device selection",
-      },
-      autoLoadModels: { type: "boolean", description: "Auto-load models on remote devices when needed" },
-      unloadAfterIdleMs: { type: "number", description: "Time in ms before auto-unloading idle models" },
-    },
-  },
 };
 
 /**
@@ -246,6 +294,15 @@ export function getDefaultDNA() {
       preferredDevices: [],
       autoLoadModels: true,
       unloadAfterIdleMs: 120000,
+      swarm: {
+        enabled: true,
+        maxLightweightModelsPerDevice: 2,
+        subtaskMaxTokens: 4000,
+        finalAggregationMaxTokens: 8000,
+        minMemoryGB: 8,
+        maxSubtasks: 8,
+        fallbackEnabled: true,
+      },
     },
   };
 }
@@ -464,6 +521,69 @@ export function validateModelDNA(dna) {
           errors.push("orchestratorConfig.globalMaxModels must be a positive number");
         }
       }
+
+      // Validate swarm configuration
+      if (dna.orchestratorConfig.swarm !== undefined) {
+        const swarm = dna.orchestratorConfig.swarm;
+        
+        if (typeof swarm !== "object" || Array.isArray(swarm)) {
+          errors.push("orchestratorConfig.swarm must be an object or undefined");
+        } else {
+          // Validate enabled
+          if (swarm.enabled !== undefined && typeof swarm.enabled !== "boolean") {
+            errors.push("orchestratorConfig.swarm.enabled must be a boolean");
+          }
+          
+          // Validate maxLightweightModelsPerDevice
+          if (swarm.maxLightweightModelsPerDevice !== undefined) {
+            if (typeof swarm.maxLightweightModelsPerDevice !== "number" || 
+                swarm.maxLightweightModelsPerDevice < 1 || 
+                swarm.maxLightweightModelsPerDevice > 8) {
+              errors.push("orchestratorConfig.swarm.maxLightweightModelsPerDevice must be a number between 1 and 8");
+            }
+          }
+          
+          // Validate subtaskMaxTokens
+          if (swarm.subtaskMaxTokens !== undefined) {
+            if (typeof swarm.subtaskMaxTokens !== "number" || 
+                swarm.subtaskMaxTokens < 1000 || 
+                swarm.subtaskMaxTokens > 8000) {
+              errors.push("orchestratorConfig.swarm.subtaskMaxTokens must be a number between 1000 and 8000");
+            }
+          }
+          
+          // Validate finalAggregationMaxTokens
+          if (swarm.finalAggregationMaxTokens !== undefined) {
+            if (typeof swarm.finalAggregationMaxTokens !== "number" || 
+                swarm.finalAggregationMaxTokens < 2000 || 
+                swarm.finalAggregationMaxTokens > 16000) {
+              errors.push("orchestratorConfig.swarm.finalAggregationMaxTokens must be a number between 2000 and 16000");
+            }
+          }
+          
+          // Validate minMemoryGB
+          if (swarm.minMemoryGB !== undefined) {
+            if (typeof swarm.minMemoryGB !== "number" || 
+                swarm.minMemoryGB < 4) {
+              errors.push("orchestratorConfig.swarm.minMemoryGB must be a number >= 4");
+            }
+          }
+          
+          // Validate maxSubtasks
+          if (swarm.maxSubtasks !== undefined) {
+            if (typeof swarm.maxSubtasks !== "number" || 
+                swarm.maxSubtasks < 1 || 
+                swarm.maxSubtasks > 32) {
+              errors.push("orchestratorConfig.swarm.maxSubtasks must be a number between 1 and 32");
+            }
+          }
+          
+          // Validate fallbackEnabled
+          if (swarm.fallbackEnabled !== undefined && typeof swarm.fallbackEnabled !== "boolean") {
+            errors.push("orchestratorConfig.swarm.fallbackEnabled must be a boolean");
+          }
+        }
+      }
     }
   }
 
@@ -568,6 +688,32 @@ const MIGRATIONS = {
     // Remove deprecated globalMaxModels field
     if (migrated.orchestratorConfig && migrated.orchestratorConfig.globalMaxModels !== undefined) {
       delete migrated.orchestratorConfig.globalMaxModels;
+    }
+
+    return migrated;
+  },
+
+  // Version 4 -> 5: Add swarm configuration
+  4: (dna) => {
+    const migrated = { ...dna, version: 5 };
+
+    // Add swarm configuration with defaults if not present
+    if (!migrated.orchestratorConfig || !migrated.orchestratorConfig.swarm) {
+      if (!migrated.orchestratorConfig) {
+        migrated.orchestratorConfig = {};
+      }
+      
+      migrated.orchestratorConfig.swarm = {
+        enabled: true,
+        maxLightweightModelsPerDevice: 2,
+        subtaskMaxTokens: 4000,
+        finalAggregationMaxTokens: 8000,
+        minMemoryGB: 8,
+        maxSubtasks: 8,
+        fallbackEnabled: true,
+      };
+      
+      console.log(`[DNA] Added swarm configuration with defaults`);
     }
 
     return migrated;

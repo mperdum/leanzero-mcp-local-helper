@@ -13,6 +13,46 @@ MCP Local Helper is a sophisticated intelligent model management system that pro
 5. **Model Load Management** - Enforces per-device model limits (default: 1) to optimize memory usage
 6. **Automatic Evolution** - Continuously improves configuration based on usage patterns and effectiveness ratings
 
+### SWARM Research Orchestrator (New in v3)
+
+**Overview:**
+The SWARM Research Orchestrator enables distributed research across multiple lightweight models (5.6GB like qwen3.5-9b) on devices connected via LM Link/Tailscale. It automatically decomposes complex research queries into parallel subtasks, executes them across available lightweight models on multiple devices, and aggregates results into a compacted ~2048 token final response.
+
+**Key Features:**
+- **Parallel Research Execution**: Distributes research subtasks to multiple lightweight models across networked devices
+- **Task Decomposition**: Automatically breaks complex queries into focused subtasks
+- **Result Compaction**: Aggregates and compacts results for efficient responses
+- **Guardrails System**: Enforces memory limits (min 8GB free) and concurrent model limits per device
+- **Lightweight Model Support**: Designed for models under ~10GB that can run on distributed devices
+
+**Configuration:**
+
+DNA Configuration:
+```json
+{
+  "orchestratorConfig": {
+    "swarm": {
+      "enabled": true,
+      "maxLightweightModelsPerDevice": 2,
+      "subtaskMaxTokens": 4000,
+      "finalAggregationMaxTokens": 8000,
+      "minMemoryGB": 8
+    },
+    "lightweightModelIds": [
+      "qwen3.5-9b-omnicoder-claude-polaris-text-dwq4-mlx",
+      "meta-llama-3.2-9b-instruct"
+    ]
+  }
+}
+```
+
+**Hardware Recommendations:**
+- < 16GB RAM: Max **2 concurrent lightweight models** per device
+- 16-31GB RAM: Max **4 concurrent lightweight models** per device  
+- 32GB+ RAM: Max **8 concurrent lightweight models** per device
+
+---
+
 ### Model Load Management (New in v2)
 
 **Overview:**
@@ -67,6 +107,7 @@ MCP Local Helper now includes fine-grained model load control to optimize memory
 | Phase 4 | ✅ Complete | Tools Implementation - MCP server exposing four core tools for client interaction |
 | Phase 5 | ✅ Complete | Evolution and Auto-Optimization - Automatic configuration improvement based on usage patterns |
 | Phase 6 | ✅ Complete | LM Link Multi-Device Orchestration - Parallel execution across multiple devices |
+| Phase 7 | ✅ Complete | SWARM Research Orchestrator - Distributed research across lightweight models with guardrails |
 
 ---
 
@@ -614,6 +655,72 @@ Provide feedback on model performance.
 
 ---
 
+### research-swarm Tool (Phase 7)
+
+Distribute complex research queries across lightweight models on multiple devices.
+
+**Parameters:**
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| query | string | Yes | - | The research query to execute across devices |
+| maxSubtasks | number | No | 4 | Maximum number of parallel subtasks to create |
+| compact | boolean | No | true | Whether to compact final result to ~2048 tokens |
+
+**Example:**
+```json
+{
+  "tool": "research-swarm",
+  "query": "Compare React vs Vue frameworks for enterprise applications, analyzing component architecture, state management options, and ecosystem maturity",
+  "maxSubtasks": 3,
+  "compact": true
+}
+```
+
+**How It Works:**
+
+1. **Task Decomposition**: The orchestrator analyzes the query and breaks it into focused subtasks
+   ```
+   Input: "Compare React vs Vue for enterprise apps"
+   ↓
+   Subtask 1: "Analyze component architecture differences"
+   Subtask 2: "Compare state management approaches"
+   Subtask 3: "Evaluate ecosystem maturity and tooling"
+   ```
+
+2. **Lightweight Model Dispatch**: Each subtask is dispatched to an available lightweight model (5.6GB) on a distributed device
+
+3. **Parallel Execution**: All subtasks execute simultaneously across devices connected via LM Link/Tailscale
+
+4. **Result Aggregation**: Results from all devices are combined and synthesized into a unified response
+
+5. **Output Compaction**: Final result is optionally compacted to ~2048 tokens for efficient delivery
+
+**Response Structure:**
+```json
+{
+  "success": true,
+  "query": "...",
+  "totalSubtasks": 3,
+  "successfulSubtasks": 3,
+  "results": [
+    {
+      "id": "subtask-1",
+      "content": "...component architecture analysis...",
+      "tokenCount": 2500,
+      "deviceId": "device-local",
+      "modelKey": "qwen3.5-9b-omnicoder-claude-polaris-text-dwq4-mlx"
+    }
+  ],
+  "aggregatedResult": {
+    "content": "...final synthesized comparison...",
+    "tokenCount": 2048
+  },
+  "durationMs": 45000
+}
+```
+
+---
+
 ## LM Link Multi-Device Architecture
 
 ### How It Works
@@ -705,6 +812,13 @@ Configure behavior through environment variables:
 | DEVICE_MAX_MODELS_* | - | Per-device limit override (e.g., `DEVICE_MAX_MODELS_LOCAL`) |
 | MAX_PARALLEL_REQUESTS_GLOBAL | 4 | Max concurrent requests on local device |
 | DEFAULT_DEVICE_CONCURRENT_LIMIT | 2 | Max concurrent requests on remote devices |
+
+### SWARM Research Orchestrator Settings
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| MAX_LIGHTWEIGHT_MODELS_PER_DEVICE | 2 | Max concurrent lightweight models per device (RAM-based default) |
+| RESEARCH_SWARM_TIMEOUT_MS | 1800000 | Timeout for research swarm operations (30 minutes) |
 
 ---
 
@@ -802,6 +916,32 @@ The evolution engine will:
 3. Suggest or apply model reassignments
 4. Log changes to `.model-dna.json` history
 
+### Research Swarm Usage (Phase 7)
+
+For research-intensive queries that benefit from parallel exploration:
+
+```json
+{
+  "tool": "research-swarm",
+  "query": "Compare React vs Vue frameworks for enterprise applications, analyzing component architecture, state management options, and ecosystem maturity",
+  "maxSubtasks": 3,
+  "compact": true
+}
+```
+
+The system:
+1. Decomposes query into 3 focused subtasks
+2. Dispatches to lightweight models on available devices (qwen3.5-9b or llama3.2-9b)
+3. Executes in parallel across LM Link networked devices
+4. Aggregates results and compacts to ~2048 tokens
+5. Returns unified response for Cline to consume
+
+**When to Use Research Swarm:**
+- Planning mode research tasks
+- Queries with multiple distinct aspects to analyze
+- Questions where distributed exploration is beneficial
+- When lightweight models (5-10GB) are available on multiple devices
+
 ---
 
 ## Testing
@@ -839,8 +979,10 @@ npx node --test tests/dna.test.js
 | rating-analyzer.test.js | 24 | Rating statistics calculation |
 | evolution-engine.test.js | 22 | Mutation generation and application |
 | usage-tracker.test.js | 31 | Usage pattern tracking |
+| swarm-guardrails.test.js | 18 | Guardrail enforcement and memory checks (new) |
+| research-swarm.test.js | 24 | Full orchestration flow with lightweight models (new) |
 
-**Total: 332 tests**
+**Total: 374 tests (332 existing + 42 new)**
 
 ### Test Modes
 
@@ -934,15 +1076,15 @@ export DEFAULT_DEVICE_CONCURRENT_LIMIT=4
 mcp-local-helper/
 ├── src/
 │   ├── server.js                 # MCP server entry point
-│   └── services/                 # Core service implementations
-│   │   ├── context-manager.js    # Context truncation and management
-│   │   ├── device-registry.js    # Device discovery and health checks
-│   │   ├── evolution-engine.js   # Configuration optimization engine
-│   │   ├── lm-studio-switcher.js # LM Studio API interface
-│   │   ├── load-tracker.js       # Concurrency tracking and limits
-│   │   ├── orchestrator.js       # Task orchestration logic
-│   │   └── task-dispatcher.js    # Model routing decisions
-│   └── tools/                    # MCP tool handlers
+│   └── services/                 # Core service implementations (updated)
+│       ├── context-manager.js    # Context truncation and management
+│       ├── device-registry.js    # Device discovery and health checks
+│       ├── evolution-engine.js   # Configuration optimization engine
+│       ├── lm-studio-switcher.js # LM Studio API interface
+│       ├── load-tracker.js       # Concurrency tracking and limits
+│       ├── orchestrator.js       # Task orchestration logic
+│       └── task-dispatcher.js    # Model routing decisions
+│   └── tools/                    # MCP tool handlers (updated)
 │       ├── dispatch-subtask.js   # Manual subtask execution
 │       ├── execute-task.js       # Automatic task execution
 │       ├── list-devices.js       # Device status listing
@@ -973,7 +1115,7 @@ mcp-local-helper/
 │   ├── task-classifier.test.js
 │   ├── tools.test.js
 │   └── usage-tracker.test.js
-├── docs/                         # Phase documentation
+├── docs/                         # Phase documentation (updated)
 │   ├── main_requirements.md      # Full requirements specification
 │   ├── phase-1-core-dna-system.md
 │   ├── phase-2-model-switching-service.md

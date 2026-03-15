@@ -32,6 +32,7 @@ import { rateModelTool, handleRateModel } from "./tools/rate-model.js";
 import { orchestrateTaskTool, handleOrchestrateTask } from "./tools/orchestrate-task.js";
 import { listDevicesTool, handleListDevices } from "./tools/list-devices.js";
 import { dispatchSubtaskTool, handleDispatchSubtask } from "./tools/dispatch-subtask.js";
+import { researchSwarmTool, handleResearchSwarm } from "./tools/research-swarm.js";
 
 // Import core services for initialization
 import { lmStudioSwitcher } from "./services/lm-studio-switcher.js";
@@ -207,6 +208,22 @@ function registerTools(server) {
     },
     async ({ prompt, deviceId, modelKey, taskType, priority }) =>
       handleDispatchSubtask({ prompt, deviceId, modelKey, taskType, priority })
+  );
+
+  // Register research-swarm tool (for Plan Mode orchestration with lightweight models)
+  server.registerTool(
+    "research-swarm",
+    {
+      title: "Research Swarm Orchestrator",
+      description: researchSwarmTool.description,
+      inputSchema: z.object({
+        query: z.string().describe("The research query to execute across lightweight models"),
+        maxSubtasks: z.number().min(1).max(32).optional(),
+        compact: z.boolean().optional(),
+      }),
+    },
+    async ({ query, maxSubtasks, compact }) =>
+      handleResearchSwarm({ query, maxSubtasks, compact })
   );
 
   console.log("[MCP-Server] Tools registered successfully");

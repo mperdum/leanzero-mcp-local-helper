@@ -398,6 +398,42 @@ export class DeviceRegistry {
   }
 
   /**
+   * Check if a device can load a specific model (memory check)
+   * @param {string} deviceId - Device identifier
+   * @param {string|null} modelKey - Model key to be loaded (optional, for memory estimation)
+   * @returns {boolean} True if device can accept the model
+   */
+  canLoadModel(deviceId, modelKey = null) {
+    const device = this.devices.get(deviceId);
+    
+    if (!device || device.status !== 'online') {
+      return false;
+    }
+
+    // Check hardware constraints
+    const ramGB = device.hardwareProfile?.ramGB || 16;
+    const modelSizeGB = 5.6; // Default estimate for lightweight models
+
+    if (modelKey) {
+      // In a real implementation, we'd query the actual model size from LM Studio metadata
+      // For now, use conservative estimates based on model naming patterns
+      if (modelKey.toLowerCase().includes('9b') || modelKey.toLowerCase().includes('8b')) {
+        // Likely a 5-7GB model
+        modelSizeGB = 5.6;
+      } else if (modelKey.toLowerCase().includes('13b')) {
+        modelSizeGB = 10;
+      } else if (modelKey.toLowerCase().includes('70b')) {
+        modelSizeGB = 40;
+      }
+    }
+
+    // Conservative: need at least 2x model size in RAM
+    const requiredMemoryGB = modelSizeGB * 2 + 2; // Model + headroom
+
+    return ramGB >= requiredMemoryGB;
+  }
+
+  /**
    * Get all online devices
    * @returns {DeviceInfo[]} Array of online devices
    */
