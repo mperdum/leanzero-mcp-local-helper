@@ -545,8 +545,8 @@ LoadTracker.prototype.recordSwarmRequestEnd = function(deviceId, modelKey, succe
 
 // Export helper functions for direct use
 export const swarmLoadTracking = {
-  getAvailableDevicesForSwarm,
-  canAcceptSwarmRequest,
-  recordSwarmRequestStart,
-  recordSwarmRequestEnd,
+  getAvailableDevicesForSwarm: async (options = {}) => loadTracker.getAvailableDevicesForSwarm(options),
+  canAcceptSwarmRequest: (deviceId) => loadTracker.canAcceptSwarmRequest(deviceId),
+  recordSwarmRequestStart: (deviceId, modelKey) => loadTracker.recordSwarmRequestStart(deviceId, modelKey),
+  recordSwarmRequestEnd: (deviceId, modelKey, success) => loadTracker.recordSwarmRequestEnd(deviceId, modelKey, success),
 };

@@ -12,6 +12,15 @@ import { watch } from "node:fs";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
+// Import getDefaultDNA and other schema functions from the schema module
+import {
+  getDefaultDNA,
+  validateModelDNA,
+  applyMigration,
+  loadDNAFromFile,
+  saveDNAToFile,
+} from "./model-dna-schema.js";
+
 // DNA file constants
 export const DNA_FILENAME = ".model-dna.json";
 export const USER_DNA_FILENAME = ".model-user.json";
@@ -605,14 +614,8 @@ export function watchDNAFiles(projectRoot, callback) {
   };
 }
 
-// Re-export from schema module
-import {
-  getDefaultDNA,
-  validateModelDNA,
-  applyMigration,
-  loadDNAFromFile,
-  saveDNAToFile,
-} from "./model-dna-schema.js";
+// Re-export schema functions for convenience
+export { getDefaultDNA, validateModelDNA, applyMigration, loadDNAFromFile, saveDNAToFile };
 
 // Hardware detector import
 import { hardwareDetector } from "./hardware-detector.js";

@@ -478,6 +478,9 @@ export class ResearchSwarmOrchestrator {
     // Step 4: Aggregate results
     const aggregationResult = await this.aggregateResults(results);
 
+    // FIX: Clear subtask errors after successful completion to prevent memory leak
+    _subtaskErrors.clear();
+
     const orchestrationDuration = Date.now() - startTime;
 
     console.log(`[ResearchSwarm] Complete in ${orchestrationDuration}ms`);

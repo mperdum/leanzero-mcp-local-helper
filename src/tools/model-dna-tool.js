@@ -4,7 +4,7 @@
  * Provides DNA configuration management with CRUD operations for model selection and optimization.
  */
 
-import { loadModelDNA, createDNAFile, saveMemory, deleteMemory, getMaxModelsPerDevice } from "../utils/model-dna-manager.js";
+import { loadModelDNA, createDNAFile, updateDNA, saveMemory, deleteMemory, getMaxModelsPerDevice } from "../utils/model-dna-manager.js";
 import { getDefaultDNA } from "../utils/model-dna-schema.js";
 import { hardwareDetector } from "../utils/hardware-detector.js";
 
@@ -278,20 +278,24 @@ async function handleEvolveDNA(params) {
     // Apply top suggestion
     const topSuggestion = analysis.suggestions[0];
 
-    if (topSuggestion.mutation) {
-      // Apply mutation
-      const parts = topSuggestion.mutation.path.split(".");
-      let target = evolvedDna;
+      if (topSuggestion.mutation) {
+        // Apply mutation
+        const parts = topSuggestion.mutation.path.split(".");
+        let target = evolvedDna;
 
-      for (let i = 0; i < parts.length - 1; i++) {
-        target = target[parts[i]];
+        for (let i = 0; i < parts.length - 1; i++) {
+          target = target[parts[i]];
+        }
+
+        target[parts[parts.length - 1]] = topSuggestion.mutation.value;
       }
-
-      target[parts[parts.length - 1]] = topSuggestion.mutation.value;
-
-      // Save evolved DNA
-      createDNAFile(evolvedDna);
-    }
+      
+      // Save evolved DNA using updateDNA to preserve existing data
+      try {
+        await updateDNA(evolvedDna);
+      } catch (error) {
+        console.error(`[ModelDNA] Failed to save evolved DNA: ${error.message}`);
+      }
   }
 
   return {

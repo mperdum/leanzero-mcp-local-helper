@@ -6,7 +6,7 @@
 import { classifyTask } from '../utils/task-classifier.js';
 import { contextManager } from './context-manager.js';
 import { lmStudioSwitcher } from './lm-studio-switcher.js';
-import { loadModelDNA } from '../utils/model-dna-manager.js';
+import { loadModelDNA, getDefaultDNA } from '../utils/model-dna-manager.js';
 
 /**
  * TaskDispatcher class - Main entry point for task execution
@@ -29,8 +29,15 @@ export class TaskDispatcher {
   async executeTask(query, dna) {
     console.log(`[TaskDispatcher] Starting task: "${query.substring(0, 50)}..."`);
     
-    // Use default DNA if not provided
-    const modelDna = dna || loadModelDNA();
+    // Validate and use DNA - fallback to defaults if not available
+    let modelDna = dna;
+    if (!modelDna) {
+      modelDna = loadModelDNA();
+    }
+    if (!modelDna) {
+      console.warn(`[TaskDispatcher] No DNA found, using defaults`);
+      modelDna = getDefaultDNA();
+    }
     
     // Step 1: Classify task intent
     const classification = classifyTask(query);
@@ -139,7 +146,15 @@ export class TaskDispatcher {
   async executeStreamingTask(query, options = {}, dna) {
     console.log(`[TaskDispatcher] Starting streaming task: "${query.substring(0, 50)}..."`);
     
-    const modelDna = dna || loadModelDNA();
+    // Validate and use DNA - fallback to defaults if not available
+    let modelDna = dna;
+    if (!modelDna) {
+      modelDna = loadModelDNA();
+    }
+    if (!modelDna) {
+      console.warn(`[TaskDispatcher] No DNA found for streaming task, using defaults`);
+      modelDna = getDefaultDNA();
+    }
     const classification = classifyTask(query);
     const taskType = classification.category.id;
     
