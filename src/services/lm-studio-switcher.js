@@ -23,10 +23,38 @@ export class LMStudioSwitcher {
     this._modelsCache = null;
     this._cacheTime = 0;
     
+    // Device ID parsing regex for Tailscale node ID extraction
+    this.deviceIdPattern = /^device-(?<nodeId>[a-f0-9]+)$/i;
+    
     // Bind methods
     this.checkConnection = this.checkConnection.bind(this);
     this.executeChatCompletion = this.executeChatCompletion.bind(this);
     this.streamChatCompletion = this.streamChatCompletion.bind(this);
+  }
+
+  /**
+   * Extract Tailscale node ID from device ID string
+   * @param {string} deviceId - Device identifier (e.g., 'device-abc12345')
+   * @returns {string|null} Node ID or null if not extractable
+   */
+  _extractDeviceNodeId(deviceId) {
+    // If already a node ID string, return as-is
+    if (deviceId.length >= 8 && /^[a-f0-9]+$/i.test(deviceId)) {
+      return deviceId;
+    }
+    
+    // Handle 'device-' prefix pattern
+    const match = deviceId.match(this.deviceIdPattern);
+    if (match?.groups?.nodeId) {
+      return match.groups.nodeId;
+    }
+    
+    // If it's just a hex string without prefix, use last 8 chars
+    if (/^[a-f0-9]+$/i.test(deviceId)) {
+      return deviceId.substring(0, 12); // First 12 chars typically sufficient for Tailscale node ID
+    }
+    
+    return null;
   }
 
   /**
@@ -245,7 +273,9 @@ export class LMStudioSwitcher {
    * @returns {Promise<Object>} Load result
    */
   async loadModel(modelId, options = {}) {
-    console.log(`[LMStudio] Loading model: ${modelId}`);
+    const { deviceId } = options;
+    
+    console.log(`[LMStudio] Loading model: ${modelId}${deviceId ? ` (device: ${deviceId})` : ''}`);
     
     try {
       // First check our in-memory cache (no API call!)
@@ -288,9 +318,10 @@ export class LMStudioSwitcher {
         }
       }
       
-      // Prepare load request payload
+      // Prepare load request payload with optional deviceId for explicit device targeting
       const loadPayload = {
         model: modelId,
+        ...(deviceId && { tailscale_node_id: this._extractDeviceNodeId(deviceId) }),
         ...options,
       };
       
@@ -351,8 +382,10 @@ export class LMStudioSwitcher {
    * @param {boolean} failIfNotFound - Throw error if model not found
    * @returns {Promise<Object>} Unload result
    */
-  async unloadModel(modelId, failIfNotFound = true) {
-    console.log(`[LMStudio] Unloading model: ${modelId}`);
+  async unloadModel(modelId, options = {}) {
+    const { deviceId } = options;
+    
+    console.log(`[LMStudio] Unloading model: ${modelId}${deviceId ? ` (device: ${deviceId})` : ''}`);
     
     try {
       // Resolve instance ID from model key if needed
@@ -373,7 +406,7 @@ export class LMStudioSwitcher {
         } else {
           console.log(`[LMStudio] Model ${modelId} is not currently loaded`);
           
-          if (failIfNotFound) {
+          if (options.failIfNotFound !== false) {
             return {
               unloaded: false,
               modelId,
@@ -391,14 +424,17 @@ export class LMStudioSwitcher {
         instanceId = modelId;
       }
       
-      // Unload via LM Studio v1 API
+      // Unload via LM Studio v1 API with optional deviceId for explicit device targeting
       const response = await fetch(`${this.lmStudioBaseUrl}/api/v1/models/unload`, {
         method: 'POST',
         headers: { 
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${process.env.LM_STUDIO_API_KEY || ''}`,
         },
-        body: JSON.stringify({ instance_id: instanceId }),
+        body: JSON.stringify({
+          instance_id: instanceId,
+          ...(deviceId && { tailscale_node_id: this._extractDeviceNodeId(deviceId) }),
+        }),
       });
       
       if (!response.ok) {

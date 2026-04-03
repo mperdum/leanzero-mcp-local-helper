@@ -14,16 +14,17 @@ export const switchModelTool = {
   name: "switch-model",
   description:
     `[ROLE] You are a model switching expert that can load/unload models in LM Studio.\n\n` +
-    `[CONTEXT] User needs to manually switch between models for different tasks.\n\n` +
+    `[CONTEXT] User needs to manually switch between models for different tasks. With LM Link, you can target specific devices via Tailscale node IDs.\n\n` +
     `[TASK] Switch models based on the provided action and model type:\n` +
-    "  - 'load': Load a specific model by ID or role\n" +
+    "  - 'load': Load a specific model by ID or role (optionally on specific device)\n" +
     "  - 'unload': Unload a specific model by ID\n" +
-    "  - 'list': List all available models with their states\n" +
-    "  - 'current': Get the currently loaded model\n\n" +
+    "  - 'list': List all available models with their states per device\n" +
+    "  - 'current': Get the currently loaded model(s) across devices\n\n`" +
     `[CONSTRAINTS]\n` +
     "  - Use model IDs from the list command for precise switching\n" +
-    "  - Models are automatically managed by LM Studio when context is exceeded\n" +
-    "  - Vision models require separate handling due to higher memory requirements\n\n" +
+    "  - LM Link routes requests to target device via Tailscale node ID in request body\n" +
+    "  - Vision models require separate handling due to higher memory requirements (5GB+)\n" +
+    "  - Explicit deviceId selection allows targeting specific devices when same model key is used on multiple devices\n\n`" +
     `[FORMAT] Returns JSON with switchResult, modelId (if applicable), and currentModel state.`,
   inputSchema: {
     type: "object",
@@ -35,7 +36,11 @@ export const switchModelTool = {
       },
       modelId: {
         type: "string",
-        description: "Model ID to load/unload (required for load/unload actions)"
+        description: "Model ID (key/name) to load/unload (required for load/unload actions)"
+      },
+      deviceId: {
+        type: "string",
+        description: "Target device ID (Tailscale node ID prefix) for explicit device targeting. Example: 'device-abc12345'. When omitted, LM Link routes based on model key."
       },
     },
     required: ["action"],

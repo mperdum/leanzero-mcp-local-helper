@@ -33,6 +33,8 @@ import { orchestrateTaskTool, handleOrchestrateTask } from "./tools/orchestrate-
 import { listDevicesTool, handleListDevices } from "./tools/list-devices.js";
 import { dispatchSubtaskTool, handleDispatchSubtask } from "./tools/dispatch-subtask.js";
 import { researchSwarmTool, handleResearchSwarm } from "./tools/research-swarm.js";
+import { listMcpToolsTool, handleListMcpTools } from "./tools/list-mcp-tools.js";
+import { routeTaskToMcpTool, handleRouteTaskToMcp } from "./tools/route-task-to-mcp.js";
 
 // Import core services for initialization
 import { lmStudioSwitcher } from "./services/lm-studio-switcher.js";
@@ -106,9 +108,10 @@ function registerTools(server) {
       inputSchema: z.object({
         action: z.enum(["load", "unload", "list", "current"]),
         modelId: z.string().optional(),
+        deviceId: z.string().optional().describe("Target device ID (Tailscale node ID prefix) for explicit device targeting. Example: 'device-abc12345'. When omitted, LM Link routes based on model key."),
       }),
     },
-    async ({ action, modelId }) => handleSwitchModel({ action, modelId })
+    async ({ action, modelId, deviceId }) => handleSwitchModel({ action, modelId, deviceId })
   );
 
   // Register execute-task tool
@@ -224,6 +227,37 @@ function registerTools(server) {
     },
     async ({ query, maxSubtasks, compact }) =>
       handleResearchSwarm({ query, maxSubtasks, compact })
+  );
+
+  // Register list-mcp-tools tool (for MCP Tool Catalog discovery)
+  server.registerTool(
+    "list-mcp-tools",
+    {
+      title: "List MCP Tools",
+      description: listMcpToolsTool.description,
+      inputSchema: z.object({
+        includeCapabilities: z.boolean().optional(),
+        filterByCapability: z.enum(["contentExtraction", "multiSource", "documentAnalysis", "multiFormat", "parallelExecution", "deviceAware"]).optional(),
+      }),
+    },
+    async ({ includeCapabilities, filterByCapability }) =>
+      handleListMcpTools({ includeCapabilities, filterByCapability })
+  );
+
+  // Register route-task-to-mcp tool (for cross-MCP orchestration routing)
+  server.registerTool(
+    "route-task-to-mcp",
+    {
+      title: "Route Task to MCP",
+      description: routeTaskToMcpTool.description,
+      inputSchema: z.object({
+        query: z.string().describe("The task or query to route to the appropriate MCP"),
+        capabilities: z.array(z.string()).optional(),
+        priority: z.number().min(1).max(20).optional(),
+      }),
+    },
+    async ({ query, capabilities, priority }) =>
+      handleRouteTaskToMcp({ query, capabilities, priority })
   );
 
   console.log("[MCP-Server] Tools registered successfully");
