@@ -66,9 +66,18 @@ export class ResearchSwarmOrchestrator {
       fallbackEnabled: true,
     };
 
+    // Lightweight models for SWARM research - dynamically populated from LM Studio
+    // These are models under ~10GB that work well for distributed research
     this.lightweightModelIds = [
       "qwen3.5-9b-omnicoder-claude-polaris-text-dwq4-mlx",
       "meta-llama-3.2-9b-instruct",
+    ];
+    
+    // Additional lightweight model patterns to auto-discover
+    this.lightweightModelPatterns = [
+      /qwen.*9b/i,
+      /llama.*3\.2.*9b/i,
+      /gemma.*4.*it/i,
     ];
 
     this._loadedLightweightModels = new Map(); // device -> modelKey mapping

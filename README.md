@@ -4,6 +4,53 @@
 
 MCP Local Helper is a sophisticated intelligent model management system that provides automatic model selection, intelligent task routing, and multi-device orchestration for LM Studio through the Model Context Protocol (MCP). The system uses a DNA-based configuration architecture to track model effectiveness across different task types, enabling continuous optimization of model assignments based on actual performance data.
 
+### Designed For: Cline + LM Studio
+
+This MCP server is specifically optimized to bring **local LLMs closer to Claude-like capabilities** without relying on "dead brain" cloud models. It works best with:
+
+- **Cline (AI coding assistant)** - As your primary client interface
+- **LM Studio** - For hosting and managing local LLMs
+- **Qwen3-coder-next** - The current pinnacle for local models (speed/quality balance on sub-128GB machines)
+
+---
+
+## Tested Models
+
+This system has been tested and verified to work well with the following models. The DNA system is designed to be model-agnostic, automatically discovering what you have available.
+
+### Model Categories
+
+| Category | Model Name(s) | Best For | RAM Required | Notes |
+|----------|--------------|----------|--------------|-------|
+| **Pinnacle** | `qwen3-coder-next`, `huihui-ai_qwen3-coder-next-abliterated` | Code generation, debugging, reasoning | 8GB+ | Fast and high-quality; ideal for sub-128GB machines |
+| **Lightweight Research** | `qwen3.5-9b-omnicoder-claude-polaris-text-dwq4-mlx`, `qwen/qwen3.5-9b` | SWARM research, multi-device parallelism | 6GB+ | Perfect for distributed research across devices |
+| **Multimodal/Code** | `gemma-4-31b-it-mxfp8-mlx`, `gemma-4-26b-a4b-it-mxfp8-mlx` | Vision analysis, code tasks, reasoning | 12GB+ | Google's Gemma models with excellent math/code |
+| **Embeddings** | `text-embedding-nomic-embed-text-v1.5` | Vector embeddings, semantic search | 2GB+ | Good for context retrieval |
+
+### How Models Are Discovered
+
+Unlike systems that hardcode model names, this MCP:
+
+1. **Queries LM Studio API** at startup (`/api/v1/models`) to discover what's available
+2. **Tracks usage and ratings** per model automatically via DNA
+3. **Recommends models** based on task type + historical performance
+4. **Supports any model format** supported by LM Studio (GGUF, PyTorch, etc.)
+
+### Recommended Minimum Models
+
+For a good starting experience:
+
+| Task Type | Recommended Model |
+|-----------|-------------------|
+| General Chat | `qwen3-coder-next` |
+| Code Fixes | `qwen3-coder-next` or `gemma-4-26b-it-mxfp8-mlx` |
+| Research (Single Device) | `qwen3.5-9b` variants |
+| Research (Multi-Device SWARM) | Any lightweight model (<10GB) |
+
+---
+
+## Core Capabilities
+
 ### Core Capabilities
 
 1. **Intelligent Model Selection** - Automatically selects optimal models based on historical performance ratings and capability matching
