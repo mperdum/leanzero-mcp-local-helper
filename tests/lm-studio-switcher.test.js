@@ -338,7 +338,7 @@ describe('LM Studio Switcher', () => {
         return createMockErrorResponse('Not an API endpoint', 404);
       };
 
-      const result = await lmStudioSwitcher.unloadModel('nonexistent-instance', false);
+      const result = await lmStudioSwitcher.unloadModel('nonexistent-instance', { failIfNotFound: false });
       
       assert.strictEqual(result.unloaded, true, 'Should not fail');
       assert.ok(result.note, 'Should have note about model not loaded');

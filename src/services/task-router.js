@@ -90,6 +90,30 @@ const DEFAULT_ROUTING_CONFIG = {
       reason: "Document analysis from DOCX, PDF, XLSX files",
       priority: 2,
     },
+    {
+      id: "dna-analysis",
+      pattern: /dna|configuration|preferences|settings/i,
+      mcp: "mcp-lm-link-orchestrator",
+      tool: "model-dna",
+      reason: "DNA configuration management and optimization suggestions",
+      priority: 8,
+    },
+    {
+      id: "rate-model",
+      pattern: /rating|evaluate|assess|score|feedback/i,
+      mcp: "mcp-lm-link-orchestrator",
+      tool: "rate-model",
+      reason: "Model effectiveness rating collection and analysis",
+      priority: 7,
+    },
+    {
+      id: "device-listing",
+      pattern: /list.*device|available.*devices|status/i,
+      mcp: "mcp-lm-link-orchestrator",
+      tool: "list-devices",
+      reason: "Device status and availability for orchestration",
+      priority: 9,
+    },
   ],
 
   // Fallback behavior
