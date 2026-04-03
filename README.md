@@ -24,8 +24,6 @@ This system has been tested and verified to work well with the following models.
 |----------|--------------|----------|--------------|-------|
 | **Pinnacle** | `qwen3-coder-next`, `huihui-ai_qwen3-coder-next-abliterated` | Code generation, debugging, reasoning | 8GB+ | Fast and high-quality; ideal for sub-128GB machines |
 | **Lightweight Research** | `qwen3.5-9b-omnicoder-claude-polaris-text-dwq4-mlx`, `qwen/qwen3.5-9b` | SWARM research, multi-device parallelism | 6GB+ | Perfect for distributed research across devices |
-| **Multimodal/Code** | `gemma-4-31b-it-mxfp8-mlx`, `gemma-4-26b-a4b-it-mxfp8-mlx` | Vision analysis, code tasks, reasoning | 12GB+ | Google's Gemma models with excellent math/code |
-| **Embeddings** | `text-embedding-nomic-embed-text-v1.5` | Vector embeddings, semantic search | 2GB+ | Good for context retrieval |
 
 ### How Models Are Discovered
 
@@ -43,7 +41,7 @@ For a good starting experience:
 | Task Type | Recommended Model |
 |-----------|-------------------|
 | General Chat | `qwen3-coder-next` |
-| Code Fixes | `qwen3-coder-next` or `gemma-4-26b-it-mxfp8-mlx` |
+| Code Fixes | `qwen3-coder-next` or any Qwen 3.5 variant |
 | Research (Single Device) | `qwen3.5-9b` variants |
 | Research (Multi-Device SWARM) | Any lightweight model (<10GB) |
 
@@ -63,7 +61,7 @@ For a good starting experience:
 ### SWARM Research Orchestrator (New in v3)
 
 **Overview:**
-The SWARM Research Orchestrator enables distributed research across multiple lightweight models (5.6GB like qwen3.5-9b) on devices connected via LM Link/Tailscale. It automatically decomposes complex research queries into parallel subtasks, executes them across available lightweight models on multiple devices, and aggregates results into a compacted ~2048 token final response.
+The SWARM Research Orchestrator enables distributed research across multiple lightweight Qwen 3.5 models (6-9GB) on devices connected via LM Link/Tailscale. It automatically decomposes complex research queries into parallel subtasks, executes them across available lightweight models on multiple devices, and aggregates results into a compacted ~2048 token final response.
 
 **Key Features:**
 - **Parallel Research Execution**: Distributes research subtasks to multiple lightweight models across networked devices
@@ -94,13 +92,55 @@ DNA Configuration:
 ```
 
 **Hardware Recommendations:**
-- < 16GB RAM: Max **2 concurrent lightweight models** per device
-- 16-31GB RAM: Max **4 concurrent lightweight models** per device  
-- 32GB+ RAM: Max **8 concurrent lightweight models** per device
+- < 16GB RAM: Max **2 concurrent lightweight Qwen 3.5 models** per device
+- 16-31GB RAM: Max **4 concurrent lightweight Qwen 3.5 models** per device  
+- 32GB+ RAM: Max **8 concurrent lightweight Qwen 3.5 models** per device
 
 ---
 
 ### Model Load Management (New in v2)
+
+**Overview:**
+MCP Local Helper now includes fine-grained model load control to optimize memory usage on resource-constrained systems. By default, only **1 model per device** can be loaded at a time.
+
+**Key Features:**
+- **Conservative Default**: 1 model per device (prevents memory exhaustion)
+- **Hardware Detection**: Automatically detects RAM/CPU for recommendations
+- **Tunable**: Override via DNA configuration or environment variables
+- **Auto-Eviction**: When limit reached, oldest model is automatically unloaded
+
+**Configuration Options:**
+
+| Method | Example |
+|--------|---------|
+| DNA Config | `"maxModelsPerDevice": {"*": 3}` |
+| Per Device | `"device-local": 2` |
+| Environment | `MAX_MODELS_PER_DEVICE=3` |
+
+**Hardware Recommendations** (when not explicitly configured):
+- < 8GB RAM: **1 model** (conservative)
+- 8-15GB RAM: **1 model** (default for safety)
+- 16-31GB RAM: **2 models** (recommended)
+- 32GB+ RAM: **4 models** (high-end)
+
+**How It Works:**
+1. Check DNA's `orchestratorConfig.maxModelsPerDevice` configuration
+2. Fall back to hardware-based detection via `getMaxModelsPerDevice()`
+3. Unload oldest model (FIFO) when limit is exceeded
+4. Per-device limits allow heterogeneous multi-machine setups
+
+**DNA Schema:**
+```json
+{
+  "orchestratorConfig": {
+    "maxModelsPerDevice": {
+      "*": 3,
+      "device-local": 2,
+      "device-12345678": 4
+    }
+  }
+}
+```
 
 **Overview:**
 MCP Local Helper now includes fine-grained model load control to optimize memory usage on resource-constrained systems. By default, only **1 model per device** can be loaded at a time.
@@ -766,6 +806,12 @@ Distribute complex research queries across lightweight models on multiple device
 }
 ```
 
+**When to Use Research Swarm:**
+- Planning mode research tasks
+- Queries with multiple distinct aspects to analyze
+- Questions where distributed exploration is beneficial
+- When lightweight Qwen 3.5 models (<10GB) are available on multiple devices |
+
 ---
 
 ## LM Link Multi-Device Architecture
@@ -978,7 +1024,7 @@ For research-intensive queries that benefit from parallel exploration:
 
 The system:
 1. Decomposes query into 3 focused subtasks
-2. Dispatches to lightweight models on available devices (qwen3.5-9b or llama3.2-9b)
+2. Dispatches to lightweight Qwen 3.5 models on available devices (qwen3.5-9b variants)
 3. Executes in parallel across LM Link networked devices
 4. Aggregates results and compacts to ~2048 tokens
 5. Returns unified response for Cline to consume
@@ -987,7 +1033,7 @@ The system:
 - Planning mode research tasks
 - Queries with multiple distinct aspects to analyze
 - Questions where distributed exploration is beneficial
-- When lightweight models (5-10GB) are available on multiple devices
+- When lightweight Qwen 3.5 models (<10GB) are available on multiple devices |
 
 ---
 
