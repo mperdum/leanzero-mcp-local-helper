@@ -209,9 +209,9 @@ function registerTools(server) {
       description:
         `[ROLE] Get an overview of all connected devices.\n\n` +
         `[CONTEXT] The research orchestrator uses this to determine available subagents. Use this for:\n` +
-        "- Checking device availability before complex research tasks\n" +
-        "- Monitoring load across devices\n` +
-        "- Verifying Tailscale mesh connectivity",
+         "- Checking device availability before complex research tasks\n" +
+         "- Monitoring load across devices\n" +
+         "- Verifying Tailscale mesh connectivity",
       inputSchema: z.object({
         includeLoadStats: z.boolean().optional(),
         filterByCapability: z.enum(["vision", "toolUse"]).optional(),
@@ -315,23 +315,31 @@ async function main() {
     // Setup signal handlers for graceful shutdown
     setupSignalHandlers(server);
 
-    // Initialize core services (optional - services will auto-initialize on first use)
-    import("./services/lm-studio-switcher.js").then(({ initializeLMStudioSwitcher }) => {
-      initializeLMStudioSwitcher();
-    });
+     // Initialize core services before starting the server
+     console.log("[MCP-Server] Initializing core services...");
 
-    // Import and initialize orchestration services
-    Promise.all([
-      import("./services/orchestrator.js"),
-      import("./services/load-tracker.js"),
-      import("./services/device-registry.js")
-    ]).then(([orchMod, loadMod, devMod]) => {
-      if (orchMod.initializeOrchestrator) {
-        orchMod.initializeOrchestrator();
-      }
-    });
+     const [
+       { initializeLMStudioSwitcher },
+       { initializeOrchestrator },
+       { initializeLoadTracker },
+       { initializeDeviceRegistry }
+     ] = await Promise.all([
+       import("./services/lm-studio-switcher.js"),
+       import("./services/orchestrator.js"),
+       import("./services/load-tracker.js"),
+       import("./services/device-registry.js")
+     ]);
 
-    // Create transport (stdio for MCP)
+     await Promise.all([
+       initializeLMStudioSwitcher(),
+       initializeOrchestrator(),
+       initializeLoadTracker(),
+       initializeDeviceRegistry()
+     ]);
+
+     console.log("[MCP-Server] Core services initialized.");
+
+     // Create transport (stdio for MCP)
     const transport = new StdioServerTransport();
 
     // Connect server to transport

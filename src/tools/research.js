@@ -11,10 +11,6 @@
  * - Feeds consolidated output to the main AI model
  */
 
-import { taskOrchestrator } from '../services/orchestrator.js';
-import { researchSwarmOrchestrator } from '../services/research-swarm-orchestrator.js';
-import { loadTracker } from '../services/load-tracker.js';
-import { deviceRegistry } from '../services/device-registry.js';
 import { classifyTask, getTaskCategories } from '../utils/task-classifier.js';
 import { analyzeTask, decompose, selectTaskType } from '../utils/task-decomposer.js';
 
@@ -98,6 +94,7 @@ export function analyzeResearchQuery(query) {
  * @returns {Promise<Array<{ deviceId: string, name: string, tier: string }>>}
  */
 async function getResearchDevices(requiredCapabilities = []) {
+  const { deviceRegistry } = await import('../services/device-registry.js');
   const onlineDevices = deviceRegistry.getOnlineDevices();
   
   if (onlineDevices.length === 0) {
@@ -185,6 +182,7 @@ async function executeOnDevice(params) {
   // For research-intensive queries, use swarm; otherwise direct execution
   if (queryAnalysis.complexity === 'complex' || /research|compare|analyze/i.test(query)) {
     try {
+      const { researchSwarmOrchestrator } = await import('../services/research-swarm-orchestrator.js');
       result = await researchSwarmOrchestrator.orchestrate(query, { maxSubtasks: 3 });
       console.log(`[Research] Swarm succeeded on ${deviceId}`);
     } catch (swarmError) {
@@ -196,6 +194,7 @@ async function executeOnDevice(params) {
   // If no result from swarm, fall back to task orchestrator execution
   if (!result) {
     try {
+      const { taskOrchestrator } = await import('../services/orchestrator.js');
       result = await taskOrchestrator.executePlan({
         originalTask: query,
         subtasks: [new (await import('../utils/task-decomposer.js')).Subtask(
@@ -311,6 +310,8 @@ export async function executeResearch(params) {
     agentCount = Math.min(devices.length, maxSubtasks || 5);
   } else {
     // Simple query: use optimal single device
+    const { loadTracker } = await import('../services/load-tracker.js');
+    const { deviceRegistry } = await import('../services/device-registry.js');
     const findOptimalDevice = loadTracker.findOptimalDevice || function() {
       // Fallback: return the first online device or local
       const devices = deviceRegistry.getOnlineDevices();
@@ -398,6 +399,8 @@ export async function handleResearch(params) {
 
   try {
     // Initialize services if not already done
+    const { taskOrchestrator } = await import('../services/orchestrator.js');
+    const { researchSwarmOrchestrator } = await import('../services/research-swarm-orchestrator.js');
     await taskOrchestrator.initialize?.();
     await researchSwarmOrchestrator.initialize?.();
 
@@ -457,6 +460,8 @@ export function getResearchConfig() {
  * Shutdown research orchestrator
  */
 export async function shutdownResearch() {
+  const { taskOrchestrator } = await import('../services/orchestrator.js');
+  const { researchSwarmOrchestrator } = await import('../services/research-swarm-orchestrator.js');
   await taskOrchestrator.shutdown?.();
   await researchSwarmOrchestrator.shutdown?.();
 }

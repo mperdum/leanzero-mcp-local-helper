@@ -67,8 +67,7 @@ export class ResearchSwarmOrchestrator {
       fallbackEnabled: true,
     };
 
-    // Lightweight models for SWARM research - dynamically populated from LM Studio
-    // These are models under ~10GB that work well for distributed research
+    // Lightweight models for SWARM research - default list if not in DNA
     this.lightweightModelIds = [
       "qwen3.5-9b-omnicoder-claude-polaris-text-dwq4-mlx",
       "meta-llama-3.2-9b-instruct",
@@ -85,6 +84,22 @@ export class ResearchSwarmOrchestrator {
   }
 
   /**
+   * Improved token estimation heuristic
+   * @param {string} text 
+   * @returns {number}
+   */
+  _estimateTokenCount(text) {
+    if (!text) return 0;
+    // A more robust heuristic than just length / 3
+    // Splits by whitespace and common punctuation to get a rough word/token count
+    const words = text.trim().split(/\s+/).length;
+    const characters = text.length;
+    // Standard rule of thumb: 1 token ~= 4 chars or 0.75 words. 
+    // We take the max of these to be conservative.
+    return Math.ceil(Math.max(words, characters / 4));
+  }
+
+  /**
    * Initialize the orchestrator with configuration from DNA
    */
   async initialize() {
@@ -93,7 +108,13 @@ export class ResearchSwarmOrchestrator {
     const dna = loadModelDNA();
 
     if (dna?.orchestratorConfig?.swarm) {
-      this.swarmConfig = { ...this.swarmConfig, ...dna.orchestratorConfig.swarm };
+      const swarmDnaConfig = dna.orchestratorConfig.swarm;
+      this.swarmConfig = { ...this.swarmConfig, ...swarmDnaConfig };
+      
+      // Override lightweight model IDs if provided in DNA
+      if (swarmDnaConfig.lightweightModelIds && Array.isArray(swarmDnaConfig.lightweightModelIds)) {
+        this.lightweightModelIds = swarmDnaConfig.lightweightModelIds;
+      }
     }
 
     // Set orchestrator model ID from task mapping
@@ -103,6 +124,7 @@ export class ResearchSwarmOrchestrator {
       maxSubtasks: this.swarmConfig.maxSubtasks,
       subtaskMaxTokens: this.swarmConfig.subtaskMaxTokens,
       finalAggregationMaxTokens: this.swarmConfig.finalAggregationMaxTokens,
+      modelCount: this.lightweightModelIds.length
     });
   }
 
@@ -147,7 +169,7 @@ export class ResearchSwarmOrchestrator {
 
       default:
         // Create a reasonable number of subtasks based on query complexity
-        const numSubtasks = Math.min(taskLimit, 4); // Conservative for now
+        const numSubtasks = Math.min(taskLimit, this.swarmConfig.maxSubtasks || 4);
 
         for (let i = 0; i < numSubtasks; i++) {
           subtasks.push({
@@ -355,8 +377,8 @@ export class ResearchSwarmOrchestrator {
    */
   async compactResult(content, targetTokens) {
     // If already small enough, return as-is
-    if (content.length < targetTokens * 3) {
-      return { content, tokenCount: Math.round(content.length / 3) };
+    if (this._estimateTokenCount(content) < targetTokens) {
+      return { content, tokenCount: this._estimateTokenCount(content) };
     }
 
     try {
@@ -384,13 +406,13 @@ export class ResearchSwarmOrchestrator {
 
       if (!completionResult.success) {
         console.warn(`[ResearchSwarm] Compaction failed, returning original content`);
-        return { content, tokenCount: Math.round(content.length / 3) };
+        return { content, tokenCount: this._estimateTokenCount(content) };
       }
 
       const result = completionResult.result;
 
       console.log(
-        `[ResearchSwarm] Result compacted from ${Math.round(content.length / 3)} to ${result.usage.completion_tokens || 0} tokens`
+        `[ResearchSwarm] Result compacted from ${this._estimateTokenCount(content)} to ${result.usage.completion_tokens || 0} tokens`
       );
 
       return {
@@ -401,20 +423,21 @@ export class ResearchSwarmOrchestrator {
       console.error(`[ResearchSwarm] Compaction failed: ${error.message}`);
 
       // Fallback: simple truncation
-      const maxChars = targetTokens * 3;
+      const maxChars = targetTokens * 4;
       return {
         content: content.slice(0, maxChars),
-        tokenCount: Math.round(content.length / 3),
+        tokenCount: this._estimateTokenCount(content.slice(0, maxChars)),
       };
     }
   }
 
   /**
-   * Aggregate all subtask results into a final compacted response
+   * Aggregate all subtask results into a final compacted response using semantic synthesis
    * @param {Array<SubtaskResult>} results - Individual subtask results
+   * @param {string} originalQuery - The original user query for context
    * @returns {Promise<{ content: string, tokenCount: number }>} Aggregated result
    */
-  async aggregateResults(results) {
+  async aggregateResults(results, originalQuery) {
     const successfulResults = results.filter(r => r.success);
 
     if (successfulResults.length === 0) {
@@ -425,20 +448,69 @@ export class ResearchSwarmOrchestrator {
       };
     }
 
-    // Collect all content
-    const combinedContent = successfulResults
-      .map(r => `## Research Findings for Subtask ${r.id}\n\n${r.content}`)
-      .join("\n\n");
+    // Collect all findings into a raw context
+    const rawFindings = successfulResults
+      .map(r => `[Subtask ${r.id}]\n${r.content}`)
+      .join("\n\n---\n\n");
 
     console.log(
-      `[ResearchSwarm] Aggregating ${successfulResults.length} subtasks (${combinedContent.length} chars)`
+      `[ResearchSwarm] Synthesizing ${successfulResults.length} subtask findings for query: "${originalQuery.substring(0, 50)}..."`
     );
 
-    // FIX: Only compact once - directly to final limit, not twice
-    // Previously this was double-compacting (first per-result to 4000 tokens, then combined to 8000)
-    // This loses information and is inefficient
-    
-    return await this.compactResult(combinedContent, this.swarmConfig.finalAggregationMaxTokens);
+    try {
+      const synthesisModel = this.orchestratorModelId || "architect";
+      
+      const systemPrompt = `You are a master research synthesizer. Your goal is to take multiple fragmented research findings and combine them into a single, cohesive, and professional intelligence report.
+
+RULES:
+1. DO NOT simply concatenate. You must synthesize.
+2. Eliminate all redundancies and overlapping information.
+3. Organize the report logically (e.g., Introduction, Key Findings, Detailed Analysis, Conclusion).
+4. Maintain a professional, objective, and authoritative tone.
+5. If findings from different subtasks contradict each other, highlight the discrepancy rather than choosing one.
+6. Ensure the final report directly and comprehensively answers the original user query.
+7. Output ONLY the final report text. No conversational filler.`;
+
+      const completionResult = await lmStudioSwitcher.executeChatCompletion(
+        synthesisModel,
+        [
+          { role: "system", content: systemPrompt },
+          {
+            role: "user",
+            content: `Original Query: "${originalQuery}"\n\nRaw Research Findings:\n${rawFindings}`,
+          },
+        ],
+        {
+          max_output_tokens: this.swarmConfig.finalAggregationMaxTokens,
+          temperature: 0.3,
+          taskType: "synthesis",
+        }
+      );
+
+      if (!completionResult.success) {
+        throw new Error(completionResult.error);
+      }
+
+      const synthesis = completionResult.result.content;
+      const tokenCount = completionResult.result.usage.completion_tokens || this._estimateTokenCount(synthesis);
+
+      console.log(`[ResearchSwarm] Semantic synthesis complete. Estimated tokens: ${tokenCount}`);
+
+      return {
+        content: synthesis,
+        tokenCount,
+      };
+
+    } catch (error) {
+      console.error(`[ResearchSwarm] Semantic synthesis failed, falling back to concatenation: ${error.message}`);
+      
+      // Fallback: Simple concatenation if synthesis fails
+      const fallbackContent = successfulResults
+        .map(r => `## Findings from ${r.id}\n\n${r.content}`)
+        .join("\n\n---\n\n");
+
+      return await this.compactResult(fallbackContent, this.swarmConfig.finalAggregationMaxTokens);
+    }
   }
 
   /**
@@ -506,7 +578,7 @@ export class ResearchSwarmOrchestrator {
       const results = await Promise.all(executionPromises);
 
       // Step 4: Aggregate results
-      const aggregationResult = await this.aggregateResults(results);
+      const aggregationResult = await this.aggregateResults(results, query);
 
       // FIX: Clear subtask errors after successful completion to prevent memory leak
       _subtaskErrors.clear();

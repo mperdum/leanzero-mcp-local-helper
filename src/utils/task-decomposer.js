@@ -3,6 +3,8 @@
  * Decomposes complex tasks into parallelizable subtasks
  */
 
+import { loadModelDNA } from './model-dna-manager.js';
+
 // Task type definitions
 export const TASK_TYPES = {
   RESEARCH: 'research',
@@ -17,6 +19,12 @@ export const TASK_TYPES = {
  * @returns {{ complexity: 'simple' | 'moderate' | 'complex', requiresParallelism: boolean }}
  */
 export function analyzeTask(task) {
+  const dna = loadModelDNA();
+  const thresholds = dna?.orchestratorConfig?.complexityThresholds || {
+    complexWordCount: 50,
+    moderateWordCount: 20
+  };
+
   // Count key indicators of complexity
   const wordCount = task.trim().split(/\s+/).length;
   
@@ -28,9 +36,9 @@ export function analyzeTask(task) {
   
   // Determine complexity
   let complexity = 'simple';
-  if (wordCount > 50 || hasMultipleQuestions) {
+  if (wordCount > thresholds.complexWordCount || hasMultipleQuestions) {
     complexity = 'complex';
-  } else if (wordCount > 20 || hasParallelRequests || hasNumberedList) {
+  } else if (wordCount > thresholds.moderateWordCount || hasParallelRequests || hasNumberedList) {
     complexity = 'moderate';
   }
 
@@ -96,14 +104,20 @@ export class Subtask {
 }
 
 /**
- * Decompose a complex task into subtasks using heuristics
- * Priority order: code patterns > numbered lists > "and" connector > questions > synthesis
- * Code patterns get priority because they represent intentional coding tasks
+ * Decompose a complex task into subtasks
  * @param {string} task - Original task description
- * @param {number} [maxSubtasks=5] - Maximum number of subtasks to generate
- * @returns {Subtask[]}
+ * @param {Object} [options={}] - Decomposition options
+ * @param {'heuristic' | 'llm'} [options.mode='heuristic'] - The method to use
+ * @param {number} [options.maxSubtasks=5] - Maximum number of subtasks to generate
+ * @returns {Promise<Subtask[]>}
  */
-export function decompose(task, maxSubtasks = 5) {
+export async function decompose(task, options = {}) {
+  const { mode = 'heuristic', maxSubtasks = 5 } = options;
+
+  if (mode === 'llm') {
+    return await llmDecompose(task, maxSubtasks);
+  }
+
   const subtasks = [];
   
   // Strategy 1: Code-related task decomposition (highest priority for code tasks)
@@ -148,7 +162,126 @@ export function decompose(task, maxSubtasks = 5) {
     subtasks.push(createSubtask(1, TASK_TYPES.SYNTHESIS, task));
   }
 
+  console.log(`[TaskDecomposer] Decomposed into ${subtasks.length} subtasks`);
+
   return subtasks;
+}
+
+/**
+ * LLM-driven decomposition strategy
+ * @param {string} task - Original task description
+ * @param {number} maxSubtasks - Maximum number of subtasks
+ * @returns {Promise<Subtask[]>}
+ */
+async function llmDecompose(task, maxSubtasks) {
+  console.log('[TaskDecomposer] Performing LLM-driven decomposition...');
+  
+  let lmStudioSwitcher;
+  try {
+    const module = await import('./lm-studio-switcher.js');
+    lmStudioSwitcher = module.lmStudioSwitcher;
+  } catch (error) {
+    console.error('[TaskDecomposer] Failed to import lmStudioSwitcher for LLM decomposition:', error.message);
+    // Fallback to heuristic
+    return decompose(task, { mode: 'heuristic', maxSubtasks });
+  }
+
+  // Get model for decomposition from DNA (if possible)
+  let decompositionModel = 'architect';
+  try {
+    const { loadModelDNA } = await import('./model-dna-manager.js');
+    const dna = loadModelDNA();
+    decompositionModel = dna?.taskModelMapping?.decompose || 'architect';
+  } catch (e) {
+    console.warn('[TaskDecomposer] Could not load DNA for decomposition model, using default');
+  }
+
+  const systemPrompt = `You are an expert task orchestrator. Your goal is to decompose a user's complex request into a sequence of logical, parallelizable subtasks.
+
+RULES:
+1. Output ONLY a valid JSON array of objects.
+2. Each object represents a subtask and MUST have:
+   - "id": a unique string like "subtask-1"
+   - "type": one of [${Object.values(TASK_TYPES).join(', ')}]
+   - "prompt": a clear, concise instruction for an AI to execute this specific part
+   - "dependencies": an array of "id"s of subtasks that must be completed BEFORE this one can start (empty array if first)
+3. Aim for a maximum of ${maxSubtasks} subtasks.
+4. Identify opportunities for parallel execution by minimizing dependencies where possible.
+5. Ensure the final subtask(s) perform "synthesis" to combine all previous findings.
+
+EXAMPLE OUTPUT FORMAT:
+[
+  {
+    "id": "subtask-1",
+    "type": "${TASK_TYPES.RESEARCH}",
+    "prompt": "Analyze the impact of X on Y",
+    "dependencies": []
+  },
+  {
+    "id": "subtask-2",
+    "type": "${TASK_TYPES.ANALYSIS}",
+    "prompt": "Compare the findings from subtask-1 with Z",
+    "dependencies": ["subtask-1"]
+  },
+  {
+    "id": "subtask-3",
+    "type": "${TASK_TYPES.SYNTHESIS}",
+    "prompt": "Summarize all findings into a final report",
+    "dependencies": ["subtask-1", "subtask-2"]
+  }
+]`;
+
+  try {
+    const result = await lmStudioSwitcher.executeChatCompletion(
+      decompositionModel,
+      [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: `Decompose this task: "${task}"` }
+      ],
+      {
+        temperature: 0.2,
+        taskType: 'task-decomposition'
+      }
+    );
+
+    if (!result.success) {
+      throw new Error(result.error);
+    }
+
+    // Extract JSON from potential markdown blocks
+    let jsonString = result.result.content.trim();
+    if (jsonString.startsWith('```json')) {
+      jsonString = jsonString.replace(/^```json/, '').replace(/```$/, '').trim();
+    } else if (jsonString.startsWith('```')) {
+      jsonString = jsonString.replace(/^```/, '').replace(/```$/, '').trim();
+    }
+
+    const parsed = JSON.parse(jsonString);
+
+    if (!Array.isArray(parsed)) {
+      throw new Error('LLM did not return a JSON array');
+    }
+
+    // Convert to Subtask instances
+    return parsed.map((item, index) => {
+      const subtask = new Subtask(
+        item.id || `subtask-${index + 1}`,
+        item.type || TASK_TYPES.RESEARCH,
+        item.prompt || task,
+        {
+          dependencies: item.dependencies || [],
+          requiredCapabilities: item.requiredCapabilities || ['llm']
+        }
+      );
+      return subtask;
+    }).slice(0, maxSubtasks);
+
+  } catch (error) {
+    console.error('[TaskDecomposer] LLM decomposition failed:', error.message);
+    // Fallback to heuristic on failure
+    console.log('[TaskDecomposer] Falling back to heuristic decomposition');
+    return decompose(task, { mode: 'heuristic', maxSubtasks });
+  }
 }
 
 /**
@@ -372,10 +505,8 @@ export function estimateExecutionTime(plan) {
     return 0;
   }
 
-  // Simple estimation: sum of individual subtask times
-  // In production, this would use historical timing data per device/model
-  
-  const averageSubtaskMs = 30000; // Assume ~30 seconds per subtask as baseline
+  const dna = loadModelDNA();
+  const averageSubtaskMs = dna?.orchestratorConfig?.averageSubtaskMs || 30000;
   const parallelLayers = plan.executionOrder ? plan.executionOrder.length : 1;
 
   return Math.ceil(averageSubtaskMs * (plan.subtasks.length / parallelLayers));
@@ -396,11 +527,11 @@ export function selectTaskType(prompt) {
   } else if (/(analysis|evaluate|compare|assessment)/i.test(lower)) {
     return TASK_TYPES.ANALYSIS;
   }
-
+  
   // Special handling for "Analyze" verb
   if (/^analyze\b/.test(lower) || /analyze\s+(the|this|these|those)/.test(lower)) {
     return TASK_TYPES.ANALYSIS;
   }
-
+  
   return TASK_TYPES.SYNTHESIS;
 }

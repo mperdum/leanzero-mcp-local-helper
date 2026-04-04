@@ -31,7 +31,7 @@ import {
  */
 export class TaskOrchestrator {
   constructor() {
-    // Services (dependency injection)
+    // Services (dependency injection) - might be undefined due to circular dependencies
     this.deviceRegistry = deviceRegistry;
     this.loadTracker = loadTracker;
     this.lmStudioSwitcher = lmStudioSwitcher;
@@ -51,6 +51,13 @@ export class TaskOrchestrator {
     
     await deviceRegistry.initialize();
     await loadTracker.initialize();
+
+    // Load DNA for orchestrator specific configs
+    const { loadModelDNA } = await import('../utils/model-dna-manager.js');
+    const dna = loadModelDNA();
+    if (dna?.orchestratorConfig?.defaultTimeoutMs) {
+      this.defaultTimeoutMs = dna.orchestratorConfig.defaultTimeoutMs;
+    }
 
     console.log('[Orchestrator] Initialized with', this.deviceRegistry.getAllDevices().length, 'devices');
   }
@@ -96,7 +103,11 @@ export class TaskOrchestrator {
     }
 
     // Decompose into subtasks
-    const subtasks = decompose(task, context.maxSubtasks || 5);
+    const mode = context.smartDecomposition ? 'llm' : 'heuristic';
+    const subtasks = await decompose(task, { 
+      mode, 
+      maxSubtasks: context.maxSubtasks || 5 
+    });
     
     if (subtasks.length === 0) {
       throw new Error('Failed to decompose task - no subtasks generated');
@@ -152,8 +163,17 @@ export class TaskOrchestrator {
     
     console.log(`[Orchestrator] Starting orchestration ${planId}`);
 
+    // Create AbortController for this plan
+    const controller = new AbortController();
+    const { signal } = controller;
+
     // Store active plan
-    this.activePlans.set(planId, { ...plan, startedAt: new Date().toISOString(), status: 'running' });
+    this.activePlans.set(planId, { 
+      ...plan, 
+      startedAt: new Date().toISOString(), 
+      status: 'running',
+      controller 
+    });
 
     try {
       const completedSubtasks = [];
@@ -186,7 +206,7 @@ export class TaskOrchestrator {
           const canDispatch = this._canDispatch(subtask);
           
           if (canDispatch.allowed) {
-            promises.push(this._dispatchAndTrack(subtask, planId));
+            promises.push(this._dispatchAndTrack(subtask, planId, signal));
           } else {
             console.warn(`[Orchestrator] Cannot dispatch ${subtaskId}: ${canDispatch.reason}`);
             
@@ -265,7 +285,7 @@ export class TaskOrchestrator {
    * @param {Subtask} subtask - Subtask to execute
    * @returns {Promise<Subtask>} Updated subtask with result
    */
-  async dispatchSubtask(subtask) {
+  async dispatchSubtask(subtask, signal) {
     // Find optimal device for this subtask
     const optimal = this.loadTracker.findOptimalDevice(subtask);
     
@@ -291,11 +311,14 @@ export class TaskOrchestrator {
       // ARCHITECTURE NOTE: In LM Link, ALL devices (local and remote) are accessed via
       // localhost:1234. The model key identifies which device's model to use.
       // Remote execution happens automatically via Tailscale mesh routing.
-
+      
       result = await this.lmStudioSwitcher.executeChatCompletion(
         subtask.assignedModelKey || optimal.modelKey,
         subtask.prompt,
-        { max_output_tokens: 4096 }
+        { 
+          max_output_tokens: 4096,
+          signal // Pass the abort signal to the switcher
+        }
       );
 
       const durationMs = Date.now() - startTime;
@@ -426,9 +449,14 @@ export class TaskOrchestrator {
    * @param {string} planId - Plan identifier for tracking
    * @returns {Promise<Subtask>} Updated subtask
    */
-  async _dispatchAndTrack(subtask, planId) {
+  async _dispatchAndTrack(subtask, planId, signal) {
     try {
-      const result = await this.dispatchSubtask(subtask);
+      // If the plan was already aborted before we even started this subtask
+      if (signal.aborted) {
+        throw new Error('Plan aborted');
+      }
+
+      const result = await this.dispatchSubtask(subtask, signal);
       
       // Update active plan with progress
       const currentPlan = this.activePlans.get(planId);
@@ -469,17 +497,24 @@ export class TaskOrchestrator {
     }
 
     // Find alternative device
-    // Fallback to imported loadTracker if this.loadTracker is undefined (e.g., in some mock scenarios)
-    const tracker = this.loadTracker || taskOrchestrator?.constructor?.prototype.loadTracker || loadTracker; 
-    // Actually, let's just use the imported loadTracker directly if the instance property is missing
-    const activeTracker = this.loadTracker || loadTracker;
+    // Use dynamic import to break circular dependency issues
+    let activeTracker = this.loadTracker;
+    
+    if (!activeTracker || typeof activeTracker.getAvailableDevices !== 'function') {
+      try {
+        const { loadTracker: importedLoadTracker } = await import('./load-tracker.js');
+        activeTracker = this.loadTracker || importedLoadTracker;
+      } catch (error) {
+        console.error('[Orchestrator] Failed to dynamically import LoadTracker:', error.message);
+      }
+    }
 
     if (!activeTracker || typeof activeTracker.getAvailableDevices !== 'function') {
-      console.error('[Orchestrator] LoadTracker is not available for retry');
+      console.error('[Orchestrator] LoadTracker is not available for retry after dynamic import attempt');
       return;
     }
 
-    const alternatives = activeTracker.getAvailableDevices(failedTask.requiredCapabilities);
+    const alternatives = await activeTracker.getAvailableDevices(failedTask.requiredCapabilities);
     
     for (const { device } of alternatives) {
       if (device.id === failedTask.assignedDeviceId) continue;
@@ -515,14 +550,11 @@ export class TaskOrchestrator {
 
   /**
    * Cancel remaining tasks in a plan
-   * @param {Array<Promise>} activePromises - Promises to abort
+   * @param {AbortController} controller - The controller to abort
    */
-  _cancelRemainingTasks(activePromises) {
-    for (const promise of activePromises) {
-      // In production, we would use AbortController for each task
-      // For now, just log that tasks are being cancelled
-      console.log('[Orchestrator] Cancelling task...');
-    }
+  _cancelRemainingTasks(controller) {
+    console.log('[Orchestrator] Aborting all active tasks in plan...');
+    controller.abort();
   }
 
   /**
@@ -539,8 +571,13 @@ export class TaskOrchestrator {
 
     console.log(`[Orchestrator] Cancelling orchestration ${planId}`);
     
-    // Mark as cancelled
+    // Mark plan as cancelled
     plan.status = 'cancelled';
+
+    // Trigger the abort signal
+    if (plan.controller) {
+      this._cancelRemainingTasks(plan.controller);
+    }
   }
 
   /**
