@@ -209,7 +209,7 @@ export class TaskOrchestrator {
               
               // Attempt retry on alternative device
               if (!result.assignedDeviceId || !result.assignedModelKey) {
-                await this._retryOnAlternativeDevice(plan, result);
+                await this._retryOnAlternativeDevice(plan, planId, result);
               }
             }
           }
@@ -459,16 +459,27 @@ export class TaskOrchestrator {
   /**
    * Retry a failed subtask on an alternative device
    * @param {OrchestrationPlan} plan - Original plan
+   * @param {string} planId - Plan ID for tracking
    * @param {Subtask} failedTask - Failed subtask
    * @returns {Promise<void>}
    */
-  async _retryOnAlternativeDevice(plan, failedTask) {
+  async _retryOnAlternativeDevice(plan, planId, failedTask) {
     if (!failedTask.assignedDeviceId || !failedTask.assignedModelKey) {
       return;
     }
 
     // Find alternative device
-    const alternatives = this.loadTracker.getAvailableDevices(failedTask.requiredCapabilities);
+    // Fallback to imported loadTracker if this.loadTracker is undefined (e.g., in some mock scenarios)
+    const tracker = this.loadTracker || taskOrchestrator?.constructor?.prototype.loadTracker || loadTracker; 
+    // Actually, let's just use the imported loadTracker directly if the instance property is missing
+    const activeTracker = this.loadTracker || loadTracker;
+
+    if (!activeTracker || typeof activeTracker.getAvailableDevices !== 'function') {
+      console.error('[Orchestrator] LoadTracker is not available for retry');
+      return;
+    }
+
+    const alternatives = activeTracker.getAvailableDevices(failedTask.requiredCapabilities);
     
     for (const { device } of alternatives) {
       if (device.id === failedTask.assignedDeviceId) continue;
@@ -488,13 +499,13 @@ export class TaskOrchestrator {
         console.log(`[Orchestrator] Retry successful on ${device.id}`);
         
         // Update plan with successful result
-        const currentPlan = this.activePlans.get(plan.originalTask);
+        const currentPlan = this.activePlans.get(planId);
         if (currentPlan) {
           const updatedSubtasks = currentPlan.subtasks.map(t => 
             t.id === retryTask.id ? retryTask : t
           );
           
-          this.activePlans.set(currentPlan.originalTask, { ...currentPlan, subtasks: updatedSubtasks });
+          this.activePlans.set(planId, { ...currentPlan, subtasks: updatedSubtasks });
         }
 
         break;
