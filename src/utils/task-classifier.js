@@ -11,37 +11,43 @@ export const TASK_CATEGORIES = {
     id: "codeFixes",
     keywords: ["fix", "bug", "error", "debug", "syntax", "crash", "exception"],
     recommendedModel: "ninjaResearcher",
-    description: "Code fixes, debugging, error resolution"
+    description: "Code fixes, debugging, error resolution",
+    requiredCapabilities: ["toolUse"]
   },
   FEATURE_ARCHITECTURE: {
     id: "featureArchitecture",
     keywords: ["architecture", "design", "structure", "pattern", "module", "layer"],
     recommendedModel: "architect",
-    description: "Feature architecture, design patterns, system structure"
+    description: "Feature architecture, design patterns, system structure",
+    requiredCapabilities: ["toolUse"]
   },
   CODE_EXECUTION: {
     id: "codeExecution",
     keywords: ["execute", "run", "write", "create", "edit", "generate", "modify"],
     recommendedModel: "executor",
-    description: "Code execution, writing, and editing"
+    description: "Code execution, writing, and editing",
+    requiredCapabilities: ["toolUse"]
   },
   GENERAL_RESEARCH: {
     id: "generalResearch",
     keywords: ["research", "information", "overview", "summary", "explain", "what is"],
     recommendedModel: "researcher",
-    description: "General research, information gathering"
+    description: "General research, information gathering",
+    requiredCapabilities: []
   },
   IMAGE_ANALYSIS: {
     id: "imageAnalysis",
     keywords: ["image", "visual", "screenshot", "diagram", "chart", "graph", "picture"],
     recommendedModel: "vision",
-    description: "Image analysis, visual content understanding"
+    description: "Image analysis, visual content understanding",
+    requiredCapabilities: ["vision"]
   },
   CONVERSATION: {
     id: "conversation",
     keywords: ["chat", "talk", "discuss", "ask", "question", "hello"],
     recommendedModel: "conversationalist",
-    description: "General conversation, questions"
+    description: "General conversation, questions",
+    requiredCapabilities: []
   }
 };
 

@@ -1,40 +1,35 @@
 #!/usr/bin/env node
 
 /**
- * MCP Model Switcher Server
+ * MCP Model Switcher Server - The Orchestrator Helper
  *
  * Main entry point for the Model Context Protocol (MCP) server that exposes
- * intelligent model switching and task execution capabilities to MCP clients.
+ * intelligent orchestration and research capabilities to MCP clients.
  *
- * This server implements the Model Context Protocol (MCP) and provides four core tools:
- * - switch-model: Manual model lifecycle management
- * - execute-task: Automatic task execution with intelligent model selection
- * - model-dna: DNA configuration management
- * - rate-model: Model effectiveness rating collection
+ * Core Philosophy: This MCP is THE Orchestrator Helper that:
+ * - Spawns research subagents across devices (one agent per device)
+ * - Manages their execution and aggregation
+ * - Feeds consolidated output (~15k tokens) to the main AI model
  *
- * Requirements:
- * - Node.js 18+
- * - LM Studio running with models available
- * - @modelcontextprotocol/sdk package
+ * Primary Tool: "research" - The unified entry point for all orchestration tasks.
+ * Secondary Tools: Remaining tools for manual control, debugging, or specific use cases.
  */
 
 import { McpServer } from "@modelcontextprotocol/sdk/server.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import z from "zod";
 
-// Import tool handlers from tools directory
+// Import core research tool (main orchestrator)
+import { researchTool, handleResearch, getResearchConfig, shutdownResearch } from "./tools/research.js";
+
+// Import model lifecycle tools
 import { switchModelTool, handleSwitchModel } from "./tools/switch-model.js";
-import { executeTaskTool, handleExecuteTask } from "./tools/execute-task.js";
 import { modelDnaTool, handleModelDNA } from "./tools/model-dna-tool.js";
 import { rateModelTool, handleRateModel } from "./tools/rate-model.js";
 
-// Import orchestration tools
-import { orchestrateTaskTool, handleOrchestrateTask } from "./tools/orchestrate-task.js";
+// Import orchestration/enhancement tools
 import { listDevicesTool, handleListDevices } from "./tools/list-devices.js";
-import { dispatchSubtaskTool, handleDispatchSubtask } from "./tools/dispatch-subtask.js";
 import { researchSwarmTool, handleResearchSwarm } from "./tools/research-swarm.js";
-import { listMcpToolsTool, handleListMcpTools } from "./tools/list-mcp-tools.js";
-import { routeTaskToMcpTool, handleRouteTaskToMcp } from "./tools/route-task-to-mcp.js";
 
 // Import core services for initialization
 import { lmStudioSwitcher } from "./services/lm-studio-switcher.js";
@@ -45,7 +40,7 @@ import { lmStudioSwitcher } from "./services/lm-studio-switcher.js";
 const SERVER_CONFIG = {
   name: "mcp-lm-link-orchestrator",
   version: "1.0.0",
-  description: "Multi-device orchestration across LM Link connected devices via Tailscale mesh VPN",
+  description: "Multi-device orchestration across LM Link connected devices via Tailscale mesh VPN. The Orchestrator Helper that spawns research subagents (one per device) and aggregates results for the main AI model.",
   vendor: "LeanZero MCP",
   license: "MIT",
 };
@@ -94,46 +89,81 @@ function createServer() {
 
 /**
  * Register all tools with the MCP server
+ * Tools are organized by priority:
+ * - Primary: research (main orchestrator entry point)
+ * - Secondary: model lifecycle, device info, swarm orchestration
  * @param {McpServer} server - MCP server instance
  */
 function registerTools(server) {
   console.log("[MCP-Server] Registering tools...");
 
+  // ============================================================================
+  // PRIMARY TOOL: RESEARCH (Main Orchestrator Entry Point)
+  // ============================================================================
+
+  // Register research tool - the unified orchestrator
+  server.registerTool(
+    "research",
+    {
+      title: "Orchestrator Research Helper",
+      description:
+        `[ROLE] You are the Orchestrator Helper - the central coordinator for research tasks.\n\n` +
+        `[CONTEXT] This MCP serves as your local orchestrator that intelligently routes research queries to appropriate subagents. Each subagent operates on a dedicated device (one agent per device), analyzing codebases or answering questions and returning focused results.\n\n` +
+        `[TASK] Research a topic by describing what you want to explore:\n` +
+        "- Simple queries: Direct execution on optimal device\n" +
+        "- Complex queries (with 'and', numbered lists, multiple questions): Spawn subagents across multiple devices in parallel\n\n" +
+        `[CONSTRAINTS]\n` +
+        "  - One subagent per device (1:1 mapping)\n" +
+        "  - Results aggregated to ~15k tokens max for main model consumption\n" +
+        "  - All agents share the main project DNA configuration\n" +
+        '  - Uses Cline-inspired prompt construction for subagents\n' +
+        '[FORMAT] Returns JSON with agent results per device, aggregated synthesis, and token usage.\n\n' +
+        `[EXAMPLE USAGE]\n` +
+        "- Simple: 'What does the auth flow look like?'\n" +
+        "- Complex: 'Research authentication and authorization patterns, compare implementations in src/auth/ and src/lib/, then analyze test coverage'",
+      inputSchema: z.object({
+        query: z.string().describe("The research query to execute across devices. Use multiple questions, numbered lists, or 'and' for complex tasks that benefit from parallel subagents."),
+        maxSubtasks: z.number().min(1).max(20).optional()
+          .describe("Maximum number of subtasks to spawn per device (default: 5)"),
+      }),
+    },
+    async ({ query, maxSubtasks }) => handleResearch({ query, maxSubtasks })
+  );
+
+  // ============================================================================
+  // SECONDARY TOOLS: Model Lifecycle & Device Management
+  // ============================================================================
+
   // Register switch-model tool
   server.registerTool(
     "switch-model",
     {
-      title: "Switch Model",
-      description: switchModelTool.description,
+      title: "Switch Model (Manual)",
+      description:
+        `[ROLE] Use this tool when you need to manually control model lifecycle on devices.\n\n` +
+        `[CONTEXT] While the research orchestrator handles most automatic routing, this tool lets you explicitly load/unload models or check current state. This is useful for:\n` +
+        "- Pre-loading specific models before research tasks\n" +
+        "- Manual testing of different model capabilities\n" +
+        "- Troubleshooting model-specific issues\n\n" +
+        `[FORMAT] Actions return information about the operation result.`,
       inputSchema: z.object({
         action: z.enum(["load", "unload", "list", "current"]),
         modelId: z.string().optional(),
-        deviceId: z.string().optional().describe("Target device ID (Tailscale node ID prefix) for explicit device targeting. Example: 'device-abc12345'. When omitted, LM Link routes based on model key."),
+        deviceId: z.string().optional().describe("Target device ID for explicit device targeting. When omitted, LM Link routes based on model key."),
       }),
     },
     async ({ action, modelId, deviceId }) => handleSwitchModel({ action, modelId, deviceId })
-  );
-
-  // Register execute-task tool
-  server.registerTool(
-    "execute-task",
-    {
-      title: "Execute Task",
-      description: executeTaskTool.description,
-      inputSchema: z.object({
-        query: z.string().describe("The task to execute"),
-        modelType: z.enum(["conversationalist", "ninjaResearcher", "architect", "executor", "researcher", "vision"]).optional(),
-      }),
-    },
-    async ({ query, modelType }) => handleExecuteTask({ query, modelType })
   );
 
   // Register model-dna tool
   server.registerTool(
     "model-dna",
     {
-      title: "Model DNA Management",
-      description: modelDnaTool.description,
+      title: "Model DNA Management (Configuration)",
+      description:
+        `[ROLE] Use this to view and configure the project's Model DNA.\n\n` +
+        `[CONTEXT] The DNA tracks model effectiveness, performance metrics, and configuration preferences across all research tasks. This helps the orchestrator make informed routing decisions.\n\n` +
+        `[FORMAT] Supports init, get, evolve actions for full DNA lifecycle management.`,
       inputSchema: z.object({
         action: z.enum(["init", "get", "save-memory", "delete-memory", "evolve"]),
         companyName: z.string().optional(),
@@ -151,8 +181,11 @@ function registerTools(server) {
   server.registerTool(
     "rate-model",
     {
-      title: "Rate Model",
-      description: rateModelTool.description,
+      title: "Rate Model Effectiveness",
+      description:
+        `[ROLE] Rate the effectiveness of models used in research tasks.\n\n` +
+        `[CONTEXT] After research tasks complete, use this to provide feedback on model performance. The orchestrator uses these ratings to optimize future task routing.\n\n` +
+        `[FORMAT] 1-5 rating scale with optional feedback.`,
       inputSchema: z.object({
         modelRole: z.enum(["conversationalist", "ninjaResearcher", "architect", "executor", "researcher", "vision"]),
         taskType: z.enum(["codeFixes", "featureArchitecture", "codeExecution", "generalResearch", "imageAnalysis"]),
@@ -164,28 +197,21 @@ function registerTools(server) {
       handleRateModel({ modelRole, taskType, rating, feedback })
   );
 
-  // Register orchestrate-task tool (multi-device orchestration)
-  server.registerTool(
-    "orchestrate-task",
-    {
-      title: "Orchestrate Multi-Device Task",
-      description: orchestrateTaskTool.description,
-      inputSchema: z.object({
-        task: z.string().describe("The complex task to orchestrate across devices"),
-        maxSubtasks: z.number().min(1).max(20).optional(),
-        requiredCapabilities: z.array(z.string()).optional(),
-      }),
-    },
-    async ({ task, maxSubtasks, requiredCapabilities }) =>
-      handleOrchestrateTask({ task, maxSubtasks, requiredCapabilities })
-  );
+  // ============================================================================
+  // SUPPORTING TOOLS: Device & Swarm Orchestration
+  // ============================================================================
 
   // Register list-devices tool
   server.registerTool(
     "list-devices",
     {
       title: "List Connected Devices",
-      description: listDevicesTool.description,
+      description:
+        `[ROLE] Get an overview of all connected devices.\n\n` +
+        `[CONTEXT] The research orchestrator uses this to determine available subagents. Use this for:\n` +
+        "- Checking device availability before complex research tasks\n" +
+        "- Monitoring load across devices\n` +
+        "- Verifying Tailscale mesh connectivity",
       inputSchema: z.object({
         includeLoadStats: z.boolean().optional(),
         filterByCapability: z.enum(["vision", "toolUse"]).optional(),
@@ -195,30 +221,14 @@ function registerTools(server) {
       handleListDevices({ includeLoadStats, filterByCapability })
   );
 
-  // Register dispatch-subtask tool
-  server.registerTool(
-    "dispatch-subtask",
-    {
-      title: "Dispatch Single Subtask (Debugging)",
-      description: dispatchSubtaskTool.description,
-      inputSchema: z.object({
-        prompt: z.string().describe("The task/prompt to execute"),
-        deviceId: z.string().optional(),
-        modelKey: z.string().optional(),
-        taskType: z.enum(["research", "code-generation", "analysis", "synthesis"]).optional(),
-        priority: z.number().min(1).max(5).optional(),
-      }),
-    },
-    async ({ prompt, deviceId, modelKey, taskType, priority }) =>
-      handleDispatchSubtask({ prompt, deviceId, modelKey, taskType, priority })
-  );
-
-  // Register research-swarm tool (for Plan Mode orchestration with lightweight models)
+  // Register research-swarm tool (enhanced swarm with device targeting)
   server.registerTool(
     "research-swarm",
     {
       title: "Research Swarm Orchestrator",
-      description: researchSwarmTool.description,
+      description:
+        `[ROLE] Execute distributed research using lightweight models across devices.\n\n` +
+        `[CONTEXT] This is a specialized orchestration method for research tasks that benefit from parallel lightweight model execution. The main 'research' tool automatically uses swarm when appropriate, but you can explicitly invoke this for fine-grained control.`,
       inputSchema: z.object({
         query: z.string().describe("The research query to execute across lightweight models"),
         maxSubtasks: z.number().min(1).max(32).optional(),
@@ -227,37 +237,6 @@ function registerTools(server) {
     },
     async ({ query, maxSubtasks, compact }) =>
       handleResearchSwarm({ query, maxSubtasks, compact })
-  );
-
-  // Register list-mcp-tools tool (for MCP Tool Catalog discovery)
-  server.registerTool(
-    "list-mcp-tools",
-    {
-      title: "List MCP Tools",
-      description: listMcpToolsTool.description,
-      inputSchema: z.object({
-        includeCapabilities: z.boolean().optional(),
-        filterByCapability: z.enum(["contentExtraction", "multiSource", "documentAnalysis", "multiFormat", "parallelExecution", "deviceAware"]).optional(),
-      }),
-    },
-    async ({ includeCapabilities, filterByCapability }) =>
-      handleListMcpTools({ includeCapabilities, filterByCapability })
-  );
-
-  // Register route-task-to-mcp tool (for cross-MCP orchestration routing)
-  server.registerTool(
-    "route-task-to-mcp",
-    {
-      title: "Route Task to MCP",
-      description: routeTaskToMcpTool.description,
-      inputSchema: z.object({
-        query: z.string().describe("The task or query to route to the appropriate MCP"),
-        capabilities: z.array(z.string()).optional(),
-        priority: z.number().min(1).max(20).optional(),
-      }),
-    },
-    async ({ query, capabilities, priority }) =>
-      handleRouteTaskToMcp({ query, capabilities, priority })
   );
 
   console.log("[MCP-Server] Tools registered successfully");
@@ -304,21 +283,22 @@ async function shutdownServices() {
 
     // Shutdown orchestration services
     const { taskOrchestrator, loadTracker, deviceRegistry } = await import("./services/orchestrator.js");
-    
+
     if (taskOrchestrator) {
       taskOrchestrator.shutdown();
       console.log("[MCP-Server] Task orchestrator shut down");
     }
-    
+
     if (loadTracker && typeof loadTracker.shutdown === "function") {
       loadTracker.shutdown();
       console.log("[MCP-Server] Load tracker shut down");
     }
 
-    // Additional cleanup if needed:
-    // - Close database connections
-    // - Flush logs
-    // - Clean temporary files
+    // Shutdown research orchestrator
+    if (typeof shutdownResearch === "function") {
+      await shutdownResearch();
+      console.log("[MCP-Server] Research orchestrator shut down");
+    }
   } catch (error) {
     console.error("[MCP-Server] Error shutting down services:", error);
   }

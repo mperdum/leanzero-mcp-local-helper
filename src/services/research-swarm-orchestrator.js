@@ -6,6 +6,7 @@
 import { lmStudioSwitcher } from "./lm-studio-switcher.js";
 import { deviceRegistry } from "./device-registry.js";
 import { loadTracker } from "./load-tracker.js";
+import { swarmContextManager } from "./swarm-context-manager.js";
 import { loadModelDNA, saveDNAToFile } from "../utils/model-dna-manager.js";
 import {
   checkMemoryAvailable,
@@ -211,37 +212,38 @@ export class ResearchSwarmOrchestrator {
     return available;
   }
 
-  /**
-   * Dispatch subtasks to available lightweight models
-   * @param {Array<ResearchSubtask>} subtasks - Subtasks to dispatch
-   * @returns {Promise<Array<{ subtask: ResearchSubtask, deviceId: string, modelKey: string }>>} Dispatched assignments
-   */
-  async dispatchToLightweightModels(subtasks) {
-    const availableDevices = await this.getAvailableLightweightDevices();
-
-    if (availableDevices.length === 0) {
-      console.warn("[ResearchSwarm] No devices available for lightweight model deployment");
-      return [];
-    }
-
-    // Assign subtasks to devices
-    const assignments = [];
-
-    for (let i = 0; i < Math.min(subtasks.length, this.swarmConfig.maxSubtasks); i++) {
-      const subtask = subtasks[i];
-      const deviceIndex = i % availableDevices.length;
-      const { deviceId, modelKey } = availableDevices[deviceIndex];
-
-      assignments.push({ subtask, deviceId, modelKey });
-
-      // Mark lightweight model as in-use on this device
-      recordSwarmRequestStart(deviceId, modelKey);
-    }
-
-    console.log(`[ResearchSwarm] Assigned ${assignments.length} subtasks to devices`);
-
-    return assignments;
-  }
+   /**
+    * Dispatch subtasks to available lightweight models
+    * @param {Array<ResearchSubtask>} subtasks - Subtasks to dispatch
+    * @param {string} sessionId - The current orchestration session ID
+    * @returns {Promise<Array<{ subtask: ResearchSubtask, deviceId: string, modelKey: string, sessionId: string }>>} Dispatched assignments
+    */
+   async dispatchToLightweightModels(subtasks, sessionId) {
+     const availableDevices = await this.getAvailableLightweightDevices();
+ 
+     if (availableDevices.length === 0) {
+       console.warn("[ResearchSwarm] No devices available for lightweight model deployment");
+       return [];
+     }
+ 
+     // Assign subtasks to devices
+     const assignments = [];
+ 
+     for (let i = 0; i < Math.min(subtasks.length, this.swarmConfig.maxSubtasks); i++) {
+       const subtask = subtasks[i];
+       const deviceIndex = i % availableDevices.length;
+       const { deviceId, modelKey } = availableDevices[deviceIndex];
+ 
+       assignments.push({ subtask, deviceId, modelKey, sessionId });
+ 
+       // Mark lightweight model as in-use on this device
+       recordSwarmRequestStart(deviceId, modelKey);
+     }
+ 
+     console.log(`[ResearchSwarm] Assigned ${assignments.length} subtasks to devices`);
+ 
+     return assignments;
+   }
 
   /**
    * Execute a single research subtask
@@ -253,7 +255,7 @@ export class ResearchSwarmOrchestrator {
    * @returns {Promise<SubtaskResult>} Result of subtask execution
    */
   async executeSubtask(assignment) {
-    const { subtask, deviceId, modelKey } = assignment;
+    const { subtask, deviceId, modelKey, sessionId } = assignment;
     const startTime = Date.now();
 
     console.log(`[ResearchSwarm] Executing ${subtask.id} on ${deviceId} with ${modelKey}`);
@@ -273,11 +275,18 @@ export class ResearchSwarmOrchestrator {
         }
       }
 
+      // Get shared context for this session
+      const sharedContext = sessionId ? swarmContextManager.getSharedContext(sessionId) : "";
+
       // Execute the research query
       const completionResult = await lmStudioSwitcher.executeChatCompletion(
         modelKey,
         [
-          { role: "system", content: "You are a research assistant. Provide concise, focused answers." },
+          { 
+            role: "system", 
+            content: `You are a research assistant. Provide concise, focused answers.` + 
+                    (sharedContext ? `\n\n${sharedContext}` : "")
+          },
           { role: "user", content: subtask.query },
         ],
         {
@@ -296,6 +305,12 @@ export class ResearchSwarmOrchestrator {
       console.log(
         `[ResearchSwarm] ${subtask.id} completed in ${Date.now() - startTime}ms (${result.usage.total_tokens || 0} tokens)`
       );
+
+      // Publish key finding to shared context (first two sentences as a summary)
+      if (sessionId && result.content) {
+        const summary = result.content.split(/[.!?]/).slice(0, 2).join('.') + '.';
+        swarmContextManager.publish(sessionId, subtask.id, summary.trim());
+      }
 
       return {
         id: subtask.id,
@@ -438,70 +453,80 @@ export class ResearchSwarmOrchestrator {
 
     const startTime = Date.now();
     const maxSubtasks = options.maxSubtasks || this.swarmConfig.maxSubtasks;
+    const sessionId = `swarm-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 
-    // Step 1: Decompose query
-    const subtasks = await this.decomposeResearchQuery(query, maxSubtasks);
+    // Initialize shared context session
+    swarmContextManager.createSession(sessionId);
 
-    if (subtasks.length === 0) {
+    try {
+      // Step 1: Decompose query
+      const subtasks = await this.decomposeResearchQuery(query, maxSubtasks);
+
+      if (subtasks.length === 0) {
+        return {
+          query,
+          totalSubtasks: 0,
+          successfulSubtasks: 0,
+          results: [],
+          aggregatedResult: { content: "No subtasks could be generated", tokenCount: 0 },
+          durationMs: Date.now() - startTime,
+          error: "Query decomposition failed",
+        };
+      }
+
+      // Step 2: Dispatch to devices
+      const assignments = await this.dispatchToLightweightModels(subtasks, sessionId);
+
+      if (assignments.length === 0) {
+        return {
+          query,
+          totalSubtasks: subtasks.length,
+          successfulSubtasks: 0,
+          results: [],
+          aggregatedResult: { content: "No devices available for research", tokenCount: 0 },
+          durationMs: Date.now() - startTime,
+          error: "No devices available",
+        };
+      }
+
+      // Step 3: Execute subtasks in parallel
+      const executionPromises = assignments.map(assignment =>
+        this.executeSubtask(assignment).catch(error => ({
+          id: assignment.subtask.id,
+          content: "",
+          tokenCount: 0,
+          deviceId: assignment.deviceId,
+          modelKey: assignment.modelKey,
+          sessionId: sessionId,
+          success: false,
+          error: error.message,
+        }))
+      );
+
+      const results = await Promise.all(executionPromises);
+
+      // Step 4: Aggregate results
+      const aggregationResult = await this.aggregateResults(results);
+
+      // FIX: Clear subtask errors after successful completion to prevent memory leak
+      _subtaskErrors.clear();
+
+      const orchestrationDuration = Date.now() - startTime;
+
+      console.log(`[ResearchSwarm] Complete in ${orchestrationDuration}ms`);
+
       return {
         query,
-        totalSubtasks: 0,
-        successfulSubtasks: 0,
-        results: [],
-        aggregatedResult: { content: "No subtasks could be generated", tokenCount: 0 },
-        durationMs: Date.now() - startTime,
-        error: "Query decomposition failed",
+        totalSubtasks: assignments.length,
+        successfulSubtasks: results.filter(r => r.success).length,
+        results,
+        aggregatedResult: aggregationResult,
+        durationMs: orchestrationDuration,
       };
+    } finally {
+      // Ensure session is always cleaned up
+      swarmContextManager.endSession(sessionId);
     }
-
-    // Step 2: Dispatch to devices
-    const assignments = await this.dispatchToLightweightModels(subtasks);
-
-    if (assignments.length === 0) {
-      return {
-        query,
-        totalSubtasks: subtasks.length,
-        successfulSubtasks: 0,
-        results: [],
-        aggregatedResult: { content: "No devices available for research", tokenCount: 0 },
-        durationMs: Date.now() - startTime,
-        error: "No devices available",
-      };
-    }
-
-    // Step 3: Execute subtasks in parallel
-    const executionPromises = assignments.map(assignment =>
-      this.executeSubtask(assignment).catch(error => ({
-        id: assignment.subtask.id,
-        content: "",
-        tokenCount: 0,
-        deviceId: assignment.deviceId,
-        modelKey: assignment.modelKey,
-        success: false,
-        error: error.message,
-      }))
-    );
-
-    const results = await Promise.all(executionPromises);
-
-    // Step 4: Aggregate results
-    const aggregationResult = await this.aggregateResults(results);
-
-    // FIX: Clear subtask errors after successful completion to prevent memory leak
-    _subtaskErrors.clear();
-
-    const orchestrationDuration = Date.now() - startTime;
-
-    console.log(`[ResearchSwarm] Complete in ${orchestrationDuration}ms`);
-
-    return {
-      query,
-      totalSubtasks: assignments.length,
-      successfulSubtasks: results.filter(r => r.success).length,
-      results,
-      aggregatedResult: aggregationResult,
-      durationMs: orchestrationDuration,
-    };
   }
 
   /**

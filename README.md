@@ -492,7 +492,9 @@ Generates configuration improvements based on data patterns.
 
 ## Available Tools
 
-MCP Local Helper exposes seven tools through the MCP protocol.
+MCP Local Helper exposes eight tools through the MCP protocol, organized by priority:
+- **Primary Tool**: `research` - The unified orchestrator entry point
+- **Secondary Tools**: Model lifecycle, device info, and swarm orchestration
 
 ### switch-model Tool
 
@@ -741,6 +743,93 @@ Provide feedback on model performance.
 ```
 
 ---
+
+### research Tool (New - Phase 8)
+
+The primary entry point for all orchestration tasks. This unified tool intelligently routes research queries to appropriate subagents, with each subagent operating independently on a dedicated device.
+
+**Philosophy:** One subagent per device (1:1 mapping), sharing the main project DNA configuration.
+
+**Parameters:**
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| query | string | Yes | - | The research query to execute across devices. Use multiple questions, numbered lists, or 'and' for complex tasks that benefit from parallel subagents. |
+| maxSubtasks | number | No | 5 | Maximum number of subtasks to spawn per device |
+
+**Example:**
+```json
+{
+  "tool": "research",
+  "query": "Research authentication and authorization patterns, compare implementations in src/auth/ and src/lib/, then analyze test coverage",
+  "maxSubtasks": 4
+}
+```
+
+**How It Works:**
+
+1. **Query Analysis**: The orchestrator analyzes the query complexity (simple vs complex)
+   - Simple queries (<30 words, no parallel indicators) → single device execution
+   - Complex queries (multiple questions, numbered lists, 'and' connectors) → multi-device subagents
+
+2. **Device Discovery**: Retrieves all online devices from LM Link/Tailscale mesh
+
+3. **Subagent Spawning**: Creates one agent per device in parallel:
+   ```
+   Query: "Compare React vs Vue for enterprise apps"
+   ↓
+   Agent 1 (device-local): Component architecture analysis
+   Agent 2 (device-remote): State management comparison
+   Agent 3 (device-gpu): Ecosystem maturity evaluation
+   ```
+
+4. **Result Aggregation**: Combines results from all agents with ~15k token budget for the main model
+
+5. **Response Delivery**: Returns unified synthesis to Cline or other MCP client
+
+**Query Complexity Examples:**
+
+| Query Type | Example | Approach |
+|------------|---------|----------|
+| Simple | "What is the capital of France?" | Single device, direct execution |
+| Moderate | "Write code and add tests" | 2-3 devices in parallel |
+| Complex | "Research A, analyze B, compare C" | Multiple subagents per device |
+
+**Response Structure:**
+```json
+{
+  "success": true,
+  "query": "...",
+  "subtasksCount": 8,
+  "devicesUsed": 3,
+  "agentResults": [
+    {
+      "deviceId": "device-local",
+      "tokenCount": 4200,
+      "analysis": {"complexity": "moderate"},
+      "success": true,
+      "durationMs": 15000
+    },
+    {
+      "deviceId": "device-remote",
+      "tokenCount": 3800,
+      "analysis": {"complexity": "moderate"},
+      "success": true,
+      "durationMs": 18000
+    }
+  ],
+  "aggregatedResult": {
+    "content": "...synthesized research findings...",
+    "tokenCount": 12500
+  },
+  "durationMs": 35000
+}
+```
+
+**When to Use Research Tool:**
+- Primary entry point for all research/orchestration tasks
+- Queries that benefit from parallel exploration across devices
+- Complex queries with multiple distinct aspects to analyze
+- When you want the orchestrator to automatically determine optimal device distribution |
 
 ### research-swarm Tool (Phase 7)
 
