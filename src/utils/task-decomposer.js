@@ -16,10 +16,18 @@ export const TASK_TYPES = {
 /**
  * Analyze task complexity and determine if it requires parallelism
  * @param {string} task - Task description to analyze
- * @returns {{ complexity: 'simple' | 'moderate' | 'complex', requiresParallelism: boolean }}
+ * @param {Object} [options={}] - Analysis options
+ * @param {'heuristic' | 'semantic'} [options.mode='heuristic'] - Method to analyze complexity
+ * @returns {Promise<{ complexity: 'simple' | 'moderate' | 'complex', requiresParallelism: boolean }>}
  */
-export function analyzeTask(task) {
+export async function analyzeTask(task, options = {}) {
+  const mode = options.mode || 'heuristic';
   const dna = loadModelDNA();
+
+  if (mode === 'semantic') {
+    return await semanticAnalyzeTask(task, dna);
+  }
+
   const thresholds = dna?.orchestratorConfig?.complexityThresholds || {
     complexWordCount: 50,
     moderateWordCount: 20
@@ -46,6 +54,73 @@ export function analyzeTask(task) {
     complexity,
     requiresParallelism: complexity !== 'simple',
   };
+}
+
+/**
+ * Semantic complexity analysis using LLM
+ * @param {string} task - Task description
+ * @param {Object} dna - Model DNA
+ * @returns {Promise<Object>}
+ */
+async function semanticAnalyzeTask(task, dna) {
+  let lmStudioSwitcher;
+  try {
+    const module = await import('./lm-studio-switcher.js');
+    lmStudioSwitcher = module.lmStudioSwitcher;
+  } catch (error) {
+    console.error('[TaskDecomposer] Semantic analysis failed to import switcher:', error.message);
+    // Fallback to heuristic if import fails
+    return analyzeTask(task, { mode: 'heuristic' });
+  }
+
+  const decompositionModel = dna?.taskModelMapping?.decompose || 'architect';
+
+  const systemPrompt = `You are a task complexity analyzer. Analyze the user's request and determine its complexity level.
+  
+  Return ONLY a valid JSON object with the following structure:
+  {
+    "complexity": "simple" | "moderate" | "complex",
+    "requiresParallelism": boolean,
+    "reasoning": "short explanation"
+  }
+
+  Criteria:
+  - "simple": Single, straightforward instruction.
+  - "moderate": Multiple steps, or requires background research/context.
+  - "complex": Highly multifaceted, interdependent subtasks, or heavy computational/reasoning requirements.`;
+
+  try {
+    const result = await lmStudioSwitcher.executeChatCompletion(
+      decompositionModel,
+      [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: `Analyze this task: "${task}"` }
+      ],
+      {
+        temperature: 0.1,
+        taskType: 'task-complexity-analysis'
+      }
+    );
+
+    if (!result.success) throw new Error(result.error);
+
+    let jsonString = result.result.content.trim();
+    if (jsonString.startsWith('```json')) {
+      jsonString = jsonString.replace(/^```json/, '').replace(/```$/, '').trim();
+    } else if (jsonString.startsWith('```')) {
+      jsonString = jsonString.replace(/^```/, '').replace(/```$/, '').trim();
+    }
+
+    const parsed = JSON.parse(jsonString);
+    return {
+      complexity: parsed.complexity || 'simple',
+      requiresParallelism: !!parsed.requiresParallelism
+    };
+  } catch (error) {
+    console.error('[TaskDecomposer] Semantic analysis failed:', error.message);
+    // Fallback to heuristic on failure
+    return analyzeTask(task, { mode: 'heuristic' });
+  }
 }
 
 /**
@@ -108,11 +183,16 @@ export class Subtask {
  * @param {string} task - Original task description
  * @param {Object} [options={}] - Decomposition options
  * @param {'heuristic' | 'llm'} [options.mode='heuristic'] - The method to use
- * @param {number} [options.maxSubtasks=5] - Maximum number of subtasks to generate
+ * @param {number} [options.maxSubtasks] - Maximum number of subtasks to generate
  * @returns {Promise<Subtask[]>}
  */
 export async function decompose(task, options = {}) {
-  const { mode = 'heuristic', maxSubtasks = 5 } = options;
+  const dna = loadModelDNA();
+  const decomposerConfig = dna?.decomposerConfig || {};
+  
+  const mode = options.mode || 'heuristic';
+  const maxSubtasks = options.maxSubtasks || 
+    (mode === 'llm' ? (decomposerConfig.maxSubtasksLLM || 10) : (decomposerConfig.maxSubtasksHeuristic || 5));
 
   if (mode === 'llm') {
     return await llmDecompose(task, maxSubtasks);
@@ -120,15 +200,15 @@ export async function decompose(task, options = {}) {
 
   const subtasks = [];
   
-  // Strategy 1: Code-related task decomposition (highest priority for code tasks)
-  // Use more specific patterns to avoid false positives from words like "code" in general tasks
-  if (/(\bfunction\b|\bclass\b|\bcreate\b|\bwrite\b.*\bfunction|\.js|\.(ts|py|java|cpp)|^\s*(export\s+)?(const|let|var)\s+\w+\s*=)/i.test(task)) {
-    const codeParts = analyzeCodeTask(task);
-    
-    for (let i = 0; i < Math.min(codeParts.length, maxSubtasks); i++) {
-      subtasks.push(createSubtask(i + 1, TASK_TYPES.CODE_GENERATION, codeParts[i]));
-    }
-  }
+   // Strategy 1: Code-related task decomposition (highest priority for code tasks)
+   // Use more specific patterns to avoid false positives from words like "code" in general tasks
+   if (/(\bfunction\b|\bclass\b|\bcreate\b|\bwrite\b.*\bfunction|\.js|\.(ts|py|java|cpp)|^\s*(export\s+)?(const|let|var)\s+\w+\s*=)/i.test(task)) {
+     const codeParts = analyzeCodeTask(task);
+     
+     for (let i = 0; i < Math.min(codeParts.length, maxSubtasks); i++) {
+       subtasks.push(createSubtask(i + 1, TASK_TYPES.CODE_GENERATION, codeParts[i]));
+     }
+   }
   
   // Strategy 2: Split by numbered list
   else if (/(\d+\.\s+)/.test(task)) {
@@ -205,6 +285,8 @@ RULES:
    - "type": one of [${Object.values(TASK_TYPES).join(', ')}]
    - "prompt": a clear, concise instruction for an AI to execute this specific part
    - "dependencies": an array of "id"s of subtasks that must be completed BEFORE this one can start (empty array if first)
+   - "priority": integer between 1 and 5 (5 is highest)
+   - "requiredCapabilities": an array of strings (e.g., ["llm", "code", "vision"])
 3. Aim for a maximum of ${maxSubtasks} subtasks.
 4. Identify opportunities for parallel execution by minimizing dependencies where possible.
 5. Ensure the final subtask(s) perform "synthesis" to combine all previous findings.
@@ -215,19 +297,25 @@ EXAMPLE OUTPUT FORMAT:
     "id": "subtask-1",
     "type": "${TASK_TYPES.RESEARCH}",
     "prompt": "Analyze the impact of X on Y",
-    "dependencies": []
+    "dependencies": [],
+    "priority": 4,
+    "requiredCapabilities": ["llm"]
   },
   {
     "id": "subtask-2",
     "type": "${TASK_TYPES.ANALYSIS}",
     "prompt": "Compare the findings from subtask-1 with Z",
-    "dependencies": ["subtask-1"]
+    "dependencies": ["subtask-1"],
+    "priority": 3,
+    "requiredCapabilities": ["llm"]
   },
   {
     "id": "subtask-3",
     "type": "${TASK_TYPES.SYNTHESIS}",
     "prompt": "Summarize all findings into a final report",
-    "dependencies": ["subtask-1", "subtask-2"]
+    "dependencies": ["subtask-1", "subtask-2"],
+    "priority": 5,
+    "requiredCapabilities": ["llm"]
   }
 ]`;
 
@@ -270,7 +358,8 @@ EXAMPLE OUTPUT FORMAT:
         item.prompt || task,
         {
           dependencies: item.dependencies || [],
-          requiredCapabilities: item.requiredCapabilities || ['llm']
+          requiredCapabilities: item.requiredCapabilities || ['llm'],
+          priority: item.priority || 3
         }
       );
       return subtask;

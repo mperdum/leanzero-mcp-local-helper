@@ -17,18 +17,36 @@ export class RatingAnalyzer {
    * @param {number} [options.minRatingsForAnalysis=5] - Minimum ratings required before generating suggestions
    */
   constructor(options = {}) {
-    // Load thresholds from environment or use defaults
+    const dna = loadModelDNA();
+    const evoThresholds = dna?.evolutionThresholds || {};
+
+    // Load thresholds from DNA, environment, or provided options/defaults
     this.thresholds = {
-      lowRating: parseFloat(process.env.EVOLUTION_LOW_RATING_THRESHOLD || options.lowRating || "3.0"),
-      excellentRating: parseFloat(process.env.EVOLUTION_EXCELLENT_RATING || options.excellentRating || "4.5"),
+      lowRating: parseFloat(
+        evoThresholds.lowRatingThreshold ||
+        process.env.EVOLUTION_LOW_RATING_THRESHOLD ||
+        options.lowRating ||
+        "3.0"
+      ),
+      excellentRating: parseFloat(
+        evoThresholds.excellentRatingThreshold ||
+        process.env.EVOLUTION_EXCELLENT_RATING ||
+        options.excellentRating ||
+        "4.5"
+      ),
       minRatingsForAnalysis: parseInt(
-        process.env.EVOLUTION_MIN_RATINGS || options.minRatingsForAnalysis || "5",
+        evoThresholds.minRatingsForAnalysis ||
+        process.env.EVOLUTION_MIN_RATINGS ||
+        options.minRatingsForAnalysis ||
+        "5",
         10
       ),
     };
 
-    // High variance threshold (standard deviation > 1.0)
-    this.highVarianceThreshold = 1.0;
+    // High variance threshold (standard deviation)
+    this.highVarianceThreshold = parseFloat(
+      evoThresholds.highVarianceThreshold || "1.0"
+    );
   }
 
   /**

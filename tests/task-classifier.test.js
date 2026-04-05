@@ -12,97 +12,97 @@ describe('Task Classifier', () => {
   });
 
   describe('classifyTask()', () => {
-    it('should classify bug fix as CODE_FIXES', () => {
-      const result = classifyTask("Fix this bug in my code");
+    it('should classify bug fix as CODE_FIXES', async () => {
+      const result = await classifyTask("Fix this bug in my code");
       assert.strictEqual(result.category.id, 'codeFixes');
       assert.ok(result.confidence === 'high' || result.confidence === 'medium');
     });
 
-    it('should classify architecture question as FEATURE_ARCHITECTURE', () => {
-      const result = classifyTask("How do I design a microservices architecture?");
+    it('should classify architecture question as FEATURE_ARCHITECTURE', async () => {
+      const result = await classifyTask("How do I design a microservices architecture?");
       assert.strictEqual(result.category.id, 'featureArchitecture');
     });
 
-    it('should classify write/create as CODE_EXECUTION', () => {
-      const result = classifyTask("Write a function to sort an array");
+    it('should classify write/create as CODE_EXECUTION', async () => {
+      const result = await classifyTask("Write a function to sort an array");
       assert.strictEqual(result.category.id, 'codeExecution');
     });
 
-    it('should classify research question as GENERAL_RESEARCH', () => {
-      const result = classifyTask("What is artificial intelligence?");
+    it('should classify research question as GENERAL_RESEARCH', async () => {
+      const result = await classifyTask("What is artificial intelligence?");
       assert.strictEqual(result.category.id, 'generalResearch');
     });
 
-    it('should classify image task as IMAGE_ANALYSIS', () => {
-      const result = classifyTask("Analyze this screenshot");
+    it('should classify image task as IMAGE_ANALYSIS', async () => {
+      const result = await classifyTask("Analyze this screenshot");
       assert.strictEqual(result.category.id, 'imageAnalysis');
     });
 
-    it('should return CONVERSATION for unclear queries', () => {
-      const result = classifyTask("Hello");
+    it('should return CONVERSATION for unclear queries', async () => {
+      const result = await classifyTask("Hello");
       assert.strictEqual(result.category.id, 'conversation');
     });
 
-    it('should handle empty query', () => {
-      const result = classifyTask("");
-      assert.strictEqual(result.category.id, 'conversation');
-      assert.strictEqual(result.score, 0);
-    });
-
-    it('should handle undefined query', () => {
-      const result = classifyTask(undefined);
+    it('should handle empty query', async () => {
+      const result = await classifyTask("");
       assert.strictEqual(result.category.id, 'conversation');
       assert.strictEqual(result.score, 0);
     });
 
-    it('should handle null query', () => {
-      const result = classifyTask(null);
+    it('should handle undefined query', async () => {
+      const result = await classifyTask(undefined);
       assert.strictEqual(result.category.id, 'conversation');
       assert.strictEqual(result.score, 0);
     });
 
-    it('should handle non-string query', () => {
-      const result = classifyTask(123);
+    it('should handle null query', async () => {
+      const result = await classifyTask(null);
+      assert.strictEqual(result.category.id, 'conversation');
+      assert.strictEqual(result.score, 0);
+    });
+
+    it('should handle non-string query', async () => {
+      const result = await classifyTask(123);
       assert.strictEqual(result.category.id, 'conversation');
     });
 
-    it('should score higher for multiple keyword matches', () => {
-      const result1 = classifyTask("fix bug debug error");
-      const result2 = classifyTask("fix");
+    it('should score higher for multiple keyword matches', async () => {
+      const result1 = await classifyTask("fix bug debug error");
+      const result2 = await classifyTask("fix");
       assert.ok(result1.score > result2.score);
     });
 
-    it('should score higher for longer queries', () => {
+    it('should score higher for longer queries', async () => {
       const shortQuery = "fix";
       const longQuery = "I need to fix a bug in my authentication code that is causing users to be logged out randomly";
       
-      const shortResult = classifyTask(shortQuery);
-      const longResult = classifyTask(longQuery);
+      const shortResult = await classifyTask(shortQuery);
+      const longResult = await classifyTask(longQuery);
       
       // Long query should get bonus points for length
       assert.ok(longResult.score >= shortResult.score);
     });
 
-    it('should give bonus for first word matching keyword', () => {
-      const result = classifyTask("design a pattern for the system");
+    it('should give bonus for first word matching keyword', async () => {
+      const result = await classifyTask("design a pattern for the system");
       // First word "design" should match FEATURE_ARCHITECTURE keywords
       assert.strictEqual(result.category.id, 'featureArchitecture');
     });
 
-    it('should return high or medium confidence for clear bug fix request', () => {
-      const result = classifyTask("My code has a bug that crashes when I try to access undefined property");
+    it('should return high or medium confidence for clear bug fix request', async () => {
+      const result = await classifyTask("My code has a bug that crashes when I try to access undefined property");
       assert.strictEqual(result.category.id, 'codeFixes');
       assert.ok(result.confidence === 'high' || result.confidence === 'medium');
     });
 
-    it('should return generalResearch or conversation for research questions', () => {
-      const result = classifyTask("Tell me about machine learning");
+    it('should return generalResearch or conversation for research questions', async () => {
+      const result = await classifyTask("Tell me about machine learning");
       // The algorithm may classify as generalResearch or conversation depending on keyword match
       assert.ok(['generalResearch', 'conversation'].includes(result.category.id));
     });
 
-    it('should return low or none confidence for ambiguous queries', () => {
-      const result = classifyTask("Hello there");
+    it('should return low or none confidence for ambiguous queries', async () => {
+      const result = await classifyTask("Hello there");
       assert.ok(['low', 'none'].includes(result.confidence));
     });
   });
@@ -134,29 +134,29 @@ describe('Task Classifier', () => {
   });
 
   describe('Confidence levels', () => {
-    it('should return medium confidence for research questions', () => {
-      const result = classifyTask("Tell me about machine learning");
+    it('should return medium confidence for research questions', async () => {
+      const result = await classifyTask("Tell me about machine learning");
       assert.ok(['generalResearch', 'conversation'].includes(result.category.id));
     });
 
-    it('should return low confidence for ambiguous queries', () => {
-      const result = classifyTask("Hello there");
+    it('should return low confidence for ambiguous queries', async () => {
+      const result = await classifyTask("Hello there");
       assert.ok(['low', 'none'].includes(result.confidence));
     });
 
-    it('should return medium confidence for detailed research questions', () => {
-      const result = classifyTask("Explain what is machine learning and how it works");
+    it('should return medium confidence for detailed research questions', async () => {
+      const result = await classifyTask("Explain what is machine learning and how it works");
       assert.ok(['generalResearch', 'conversation'].includes(result.category.id));
     });
 
-    it('should return low confidence for greetings', () => {
-      const result = classifyTask("Hello there good morning");
+    it('should return low confidence for greetings', async () => {
+      const result = await classifyTask("Hello there good morning");
       assert.ok(['low', 'none'].includes(result.confidence));
     });
   });
 
   describe('registerTaskCategory()', () => {
-    it('should register a custom category', () => {
+    it('should register a custom category', async () => {
       const customCategory = {
         id: "customTask",
         keywords: ["custom", "special"],
@@ -166,7 +166,7 @@ describe('Task Classifier', () => {
       
       registerTaskCategory(customCategory);
       
-      const result = classifyTask("custom operation");
+      const result = await classifyTask("custom operation");
       assert.strictEqual(result.category.id, 'customTask');
     });
 
@@ -178,21 +178,21 @@ describe('Task Classifier', () => {
   });
 
   describe('Caching', () => {
-    it('should cache classification results', () => {
+    it('should cache classification results', async () => {
       const query = "Fix this bug now";
-      const result1 = classifyTask(query);
-      const result2 = classifyTask(query);
+      const result1 = await classifyTask(query);
+      const result2 = await classifyTask(query);
       
       assert.strictEqual(result1.category.id, result2.category.id);
     });
 
-    it('should clear cache properly', () => {
+    it('should clear cache properly', async () => {
       const query = "Debug my code";
-      classifyTask(query);
+      await classifyTask(query);
       clearClassificationCache();
       
       // Should not throw, cache is cleared
-      const result = classifyTask(query);
+      const result = await classifyTask(query);
       assert.strictEqual(result.category.id, 'codeFixes');
     });
   });

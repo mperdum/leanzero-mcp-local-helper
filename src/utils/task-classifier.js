@@ -56,7 +56,41 @@ export const TASK_CATEGORIES = {
  * @type {Map<string, Object>}
  */
 const _classificationCache = new Map();
-const CACHE_MAX_SIZE = 100;
+let _cacheMaxSize = 100;
+
+/**
+ * Configuration for the classifier
+ */
+let _classifierConfig = {
+  scoreIncrements: {
+    keywordMatch: 10,
+    lengthBonus: 5,
+    firstWordBonus: 3
+  },
+  confidenceThresholds: {
+    high: 30,
+    medium: 15
+  }
+};
+
+/**
+ * Initialize the classifier with DNA configuration
+ * @param {Object} config - Configuration object
+ */
+export async function initializeClassifier() {
+  try {
+    const { loadModelDNA } = await import('./model-dna-manager.js');
+    const dna = loadModelDNA();
+    if (dna?.classifierConfig) {
+      const cfg = dna.classifierConfig;
+      if (cfg.cacheMaxSize) _cacheMaxSize = cfg.cacheMaxSize;
+      if (cfg.scoreIncrements) _classifierConfig.scoreIncrements = cfg.scoreIncrements;
+      if (cfg.confidenceThresholds) _classifierConfig.confidenceThresholds = cfg.confidenceThresholds;
+    }
+  } catch (error) {
+    console.warn('[TaskClassifier] Failed to initialize with DNA:', error.message);
+  }
+}
 
 /**
  * Get cache key from query
@@ -76,7 +110,7 @@ function addToCache(query, result) {
   const key = getCacheKey(query);
   
   // Manage cache size
-  if (_classificationCache.size >= CACHE_MAX_SIZE) {
+  if (_classificationCache.size >= _cacheMaxSize) {
     const firstKey = _classificationCache.keys().next().value;
     _classificationCache.delete(firstKey);
   }
@@ -99,7 +133,7 @@ function getFromCache(query) {
  * @param {string} query - The user's query text
  * @returns {Object} Classification result with category, score, confidence
  */
-export function classifyTask(query) {
+export async function classifyTask(query) {
   // Edge case: empty or invalid query
   if (!query || typeof query !== "string") {
     return { 
@@ -115,59 +149,133 @@ export function classifyTask(query) {
     return cached;
   }
 
+  // 1. Heuristic Classification
+  const heuristicResult = _performHeuristicClassification(query);
+
+  // 2. Semantic Classification (if heuristic is uncertain or query is complex)
+  if (heuristicResult.confidence === "low" || 
+      heuristicResult.confidence === "none" || 
+      query.length > 100) {
+    
+    try {
+      const semanticResult = await _performSemanticClassification(query);
+      if (semanticResult && semanticResult.id) {
+        const finalResult = {
+          category: semanticResult,
+          score: 100, // Semantic match is considered high confidence
+          confidence: "high"
+        };
+        addToCache(query, finalResult);
+        return finalResult;
+      }
+    } catch (error) {
+      console.warn('[TaskClassifier] Semantic classification failed, falling back to heuristic:', error.message);
+    }
+  }
+
+  // Cache and return heuristic result if semantic failed or wasn't needed
+  addToCache(query, heuristicResult);
+  return heuristicResult;
+}
+
+/**
+ * Internal heuristic-based classification
+ * @private
+ */
+function _performHeuristicClassification(query) {
   const lowerQuery = query.toLowerCase();
-  
   let bestCategory = TASK_CATEGORIES.CONVERSATION;
   let highestScore = 0;
 
-  // Score each category based on keyword matches
   for (const category of Object.values(TASK_CATEGORIES)) {
     let score = 0;
-    
-    // Keyword matching (exact substring match)
     for (const keyword of category.keywords) {
       if (lowerQuery.includes(keyword)) {
-        score += 10; // Full points for keyword match
+        score += _classifierConfig.scoreIncrements.keywordMatch;
       }
     }
-
-    // Length bonus (longer queries typically more specific)
     if (query.length > 50) {
-      score += 5;
+      score += _classifierConfig.scoreIncrements.lengthBonus;
     }
-    
-    // First word bonus (often indicates intent)
     const firstWord = lowerQuery.split(' ')[0];
     if (category.keywords.includes(firstWord)) {
-      score += 3;
+      score += _classifierConfig.scoreIncrements.firstWordBonus;
     }
-
     if (score > highestScore) {
       highestScore = score;
       bestCategory = category;
     }
   }
 
-  // Determine confidence level
   let confidence = "low";
-  if (highestScore >= 30) {
+  if (highestScore >= _classifierConfig.confidenceThresholds.high) {
     confidence = "high";
-  } else if (highestScore >= 15) {
+  } else if (highestScore >= _classifierConfig.confidenceThresholds.medium) {
     confidence = "medium";
   } else if (highestScore === 0) {
-    confidence = "none"; // No keywords matched
+    confidence = "none";
   }
 
-  const result = { 
-    category: bestCategory, 
-    score: highestScore, 
-    confidence 
-  };
+  return { category: bestCategory, score: highestScore, confidence };
+}
 
-  // Cache result
-  addToCache(query, result);
+/**
+ * LLM-driven semantic classification
+ * @private
+ */
+async function _performSemanticClassification(query) {
+  let lmStudioSwitcher;
+  try {
+    const module = await import('../services/lm-studio-switcher.js');
+    lmStudioSwitcher = module.lmStudioSwitcher;
+  } catch (error) {
+    console.error('[TaskClassifier] Failed to import lmStudioSwitcher:', error.message);
+    return null;
+  }
 
-  return result;
+  const categoriesInfo = Object.values(TASK_CATEGORIES)
+    .map(c => `- ${c.id}: ${c.description}`)
+    .join('\n');
+
+  const systemPrompt = `You are an expert task classifier. Your goal is to analyze a user's intent and map it to the most appropriate task category.
+
+AVAILABLE CATEGORIES:
+${categoriesInfo}
+
+INSTRUCTIONS:
+1. Analyze the user's query.
+2. Select the single best category ID from the list above.
+3. Return ONLY the category ID as your response. Do not include any other text, explanation, or markdown.
+
+EXAMPLES:
+Query: "Can you help me fix this syntax error in my python code?"
+Response: codeFixes
+
+Query: "Tell me about the history of the internet"
+Response: generalResearch
+
+Query: "Draw a diagram of this architecture"
+Response: imageAnalysis`;
+
+  const result = await lmStudioSwitcher.executeChatCompletion(
+    'architect', // Using architect as default for classification
+    [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: `Query: "${query}"` }
+    ],
+    { temperature: 0.1 }
+  );
+
+  if (!result.success) return null;
+
+  const predictedId = result.result.content.trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+  
+  // Find the category in TASK_CATEGORIES by ID (case-insensitive and normalized)
+  const category = Object.values(TASK_CATEGORIES).find(c => 
+    c.id.toLowerCase().replace(/[^a-z0-9]/g, '') === predictedId
+  );
+  
+  return category || null;
 }
 
 /**
@@ -216,5 +324,6 @@ export default {
   getTaskCategories,
   registerTaskCategory,
   clearClassificationCache,
+  initializeClassifier,
   TASK_CATEGORIES
 };

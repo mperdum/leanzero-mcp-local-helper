@@ -107,14 +107,25 @@ export class ResearchSwarmOrchestrator {
 
     const dna = loadModelDNA();
 
+    // 1. Load Orchestrator-level Swarm Config
     if (dna?.orchestratorConfig?.swarm) {
       const swarmDnaConfig = dna.orchestratorConfig.swarm;
       this.swarmConfig = { ...this.swarmConfig, ...swarmDnaConfig };
-      
-      // Override lightweight model IDs if provided in DNA
-      if (swarmDnaConfig.lightweightModelIds && Array.isArray(swarmDnaConfig.lightweightModelIds)) {
-        this.lightweightModelIds = swarmDnaConfig.lightweightModelIds;
-      }
+    }
+
+    // 2. Load LoadTracker-level Swarm Config (more specific to device limits)
+    if (dna?.loadConfig?.swarm) {
+      const loadSwarmConfig = dna.loadConfig.swarm;
+      this.swarmConfig = {
+        ...this.swarmConfig,
+        minMemoryGB: loadSwarmConfig.freeMemoryThresholdGB || this.swarmConfig.minMemoryGB,
+        maxLightweightModelsPerDevice: loadSwarmConfig.maxLightweightPerDevice || this.swarmConfig.maxLightweightModelsPerDevice
+      };
+    }
+
+    // 3. Override lightweight model IDs if provided in DNA
+    if (dna?.orchestratorConfig?.swarm?.lightweightModelIds) {
+      this.lightweightModelIds = dna.orchestratorConfig.swarm.lightweightModelIds;
     }
 
     // Set orchestrator model ID from task mapping

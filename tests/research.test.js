@@ -12,11 +12,11 @@ import {
   handleResearch,
   getResearchConfig,
   shutdownResearch,
-} from '../src/tools/research.js';
+} from '../src/tools/research.js'; 
 
 /**
  * Helper to create mock device registry
- */
+ */ 
 function createMockDeviceRegistry(devices = []) {
   return {
     getOnlineDevices() {
@@ -228,18 +228,18 @@ describe('Research Tool', () => {
       const simpleQuery = 'What is the capital of France?';
       
       const { analyzeResearchQuery } = await import('../src/tools/research.js');
-      const result = analyzeResearchQuery(simpleQuery);
-
+      const result = await analyzeResearchQuery(simpleQuery);
+ 
       assert.strictEqual(result.complexity, 'simple', 'Simple query should be classified as simple');
       assert.strictEqual(result.requiresParallelism, false, 'Simple query may not need parallelism');
     });
-
+ 
     it('should classify complex query with multiple questions', async () => {
       const complexQuery = 'What is A? What is B? How are they related?';
       
       const { analyzeResearchQuery } = await import('../src/tools/research.js');
-      const result = analyzeResearchQuery(complexQuery);
-
+      const result = await analyzeResearchQuery(complexQuery);
+ 
       assert.ok(result.complexity === 'moderate' || result.complexity === 'complex', 
         'Complex query should be moderate or complex');
       assert.strictEqual(result.requiresParallelism, true, 'Multiple questions need parallelism');

@@ -1,0 +1,60 @@
+{
+  "orchestratorConfig": {
+    "defaultTimeoutMs": 60000,
+    "maxSubtasks": 5,
+    "complexityThresholds": {
+      "complexWordCount": 50,
+      "moderateWordCount": 20
+    },
+    "averageSubtaskMs": 30000
+  },
+  "deviceConfig": {
+    "discoveryIntervalMs": 30000,
+    "globalMaxParallelRequests": 4,
+    "defaultDeviceConcurrentLimit": 2,
+    "deviceCooldownMs": 1000,
+    "remoteTimeoutMs": 60000,
+    "fallbackHardware": {
+      "ramGB": 16,
+      "cpuCores": 4,
+      "gpuAvailable": false,
+      "tier": "medium"
+    },
+    "maxContextLengthFallback": 32768,
+    "memoryEstimation": {
+      "modelSizeEstimates": {
+        "lightweight": 5.6,
+        "medium": 10,
+        "large": 40
+      },
+      "multiplier": 2,
+      "headroom": 2
+    }
+  },
+  "loadConfig": {
+    "globalMaxParallelRequests": 4,
+    "defaultDeviceConcurrentLimit": 2,
+    "deviceCooldownMs": 1000,
+    "swarm": {
+      "freeMemoryThresholdGB": 8,
+      "lightweightModelSizeGB": 5.6,
+      "maxLightweightPerDevice": 2
+    }
+  },
+  "classifierConfig": {
+    "cacheMaxSize": 100,
+    "scoreIncrements": {
+      "keywordMatch": 10,
+      "lengthBonus": 5,
+      "firstWordBonus": 3
+    },
+    "confidenceThresholds": {
+      "high": 30,
+      "medium": 15
+    }
+  },
+  "decomposerConfig": {
+    "maxSubtasksHeuristic": 5,
+    "maxSubtasksLLM": 10
+  }
+}

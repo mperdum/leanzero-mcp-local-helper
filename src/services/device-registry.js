@@ -34,11 +34,11 @@ export class DeviceRegistry {
   constructor() {
     // Configuration from environment variables
     this.lmStudioBaseUrl = process.env.LM_STUDIO_URL || 'http://localhost:1234';
-    this.discoveryIntervalMs = parseInt(process.env.DEVICE_DISCOVERY_INTERVAL_MS || '30000');
-    this.globalMaxParallelRequests = parseInt(process.env.MAX_PARALLEL_REQUESTS_GLOBAL || '4');
-    this.defaultDeviceConcurrentLimit = parseInt(process.env.DEFAULT_DEVICE_CONCURRENT_LIMIT || '2');
-    this.deviceCooldownMs = parseInt(process.env.DEVICE_COOLDOWN_MS || '1000');
-    this.remoteTimeoutMs = parseInt(process.env.REMOTE_DEVICE_TIMEOUT_MS || '60000');
+    this.discoveryIntervalMs = 30000;
+    this.globalMaxParallelRequests = 4;
+    this.defaultDeviceConcurrentLimit = 2;
+    this.deviceCooldownMs = 1000;
+    this.remoteTimeoutMs = 60000;
 
     // Device storage - Map of deviceId -> DeviceInfo
     this.devices = new Map();
@@ -52,6 +52,9 @@ export class DeviceRegistry {
     
     // Mockable models provider (for testing)
     this._getModelsFn = lmStudioSwitcher.getAvailableModels.bind(lmStudioSwitcher);
+
+    // Configuration container
+    this.deviceConfig = {};
   }
 
   /**
@@ -59,6 +62,18 @@ export class DeviceRegistry {
    */
   async initialize() {
     console.log('[DeviceRegistry] Initializing...');
+    
+    // Load DNA for device specific configs
+    const { loadModelDNA } = await import('../utils/model-dna-manager.js');
+    const dna = loadModelDNA();
+    if (dna?.deviceConfig) {
+      this.deviceConfig = dna.deviceConfig;
+      this.discoveryIntervalMs = this.deviceConfig.discoveryIntervalMs || this.discoveryIntervalMs;
+      this.globalMaxParallelRequests = this.deviceConfig.globalMaxParallelRequests || this.globalMaxParallelRequests;
+      this.defaultDeviceConcurrentLimit = this.deviceConfig.defaultDeviceConcurrentLimit || this.defaultDeviceConcurrentLimit;
+      this.deviceCooldownMs = this.deviceConfig.deviceCooldownMs || this.deviceCooldownMs;
+      this.remoteTimeoutMs = this.deviceConfig.remoteTimeoutMs || this.remoteTimeoutMs;
+    }
 
     // Perform initial device discovery
     await this.discoverDevices();
@@ -106,7 +121,7 @@ export class DeviceRegistry {
       capabilities: {
         maxConcurrentRequests: this.globalMaxParallelRequests,
         supportedModelTypes: ['llm', 'vlm'],
-        maxContextLength: 32768,
+        maxContextLength: this.deviceConfig.maxContextLengthFallback || 32768,
       },
       lastSeen: new Date().toISOString(),
     };
@@ -120,7 +135,7 @@ export class DeviceRegistry {
    */
   _detectHardware() {
     // Fallback values if hardware detection fails
-    const fallbackProfile = {
+    const fallbackProfile = this.deviceConfig.fallbackHardware || {
       ramGB: 16,
       cpuCores: 4,
       gpuAvailable: false,
@@ -214,7 +229,7 @@ export class DeviceRegistry {
             capabilities: {
               maxConcurrentRequests: this._getMaxConcurrentForDevice(deviceId),
               supportedModelTypes: this._extractSupportedTypes(model),
-              maxContextLength: model.context_length || 32768,
+              maxContextLength: model.context_length || this.deviceConfig.maxContextLengthFallback || 32768,
             },
             lastSeen: new Date().toISOString(),
           });
@@ -412,23 +427,26 @@ export class DeviceRegistry {
 
     // Check hardware constraints
     const ramGB = device.hardwareProfile?.ramGB || 16;
-    const modelSizeGB = 5.6; // Default estimate for lightweight models
+    const memoryEstimation = this.deviceConfig.memoryEstimation || {};
+    const modelSizeGB = memoryEstimation.modelSizeEstimates?.lightweight || 5.6;
 
     if (modelKey) {
       // In a real implementation, we'd query the actual model size from LM Studio metadata
       // For now, use conservative estimates based on model naming patterns
       if (modelKey.toLowerCase().includes('9b') || modelKey.toLowerCase().includes('8b')) {
         // Likely a 5-7GB model
-        modelSizeGB = 5.6;
+        modelSizeGB = memoryEstimation.modelSizeEstimates?.lightweight || 5.6;
       } else if (modelKey.toLowerCase().includes('13b')) {
-        modelSizeGB = 10;
+        modelSizeGB = memoryEstimation.modelSizeEstimates?.medium || 10;
       } else if (modelKey.toLowerCase().includes('70b')) {
-        modelSizeGB = 40;
+        modelSizeGB = memoryEstimation.modelSizeEstimates?.large || 40;
       }
     }
 
     // Conservative: need at least 2x model size in RAM
-    const requiredMemoryGB = modelSizeGB * 2 + 2; // Model + headroom
+    const multiplier = memoryEstimation.multiplier || 2;
+    const headroom = memoryEstimation.headroom || 2;
+    const requiredMemoryGB = modelSizeGB * multiplier + headroom;
 
     return ramGB >= requiredMemoryGB;
   }

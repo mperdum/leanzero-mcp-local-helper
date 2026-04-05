@@ -528,9 +528,35 @@ export class LMStudioSwitcher {
       }
       
       // Prepare request payload according to LM Studio v1 API
+      // Ensure content is in the format [{ type: 'text', text: '...' }] for multimodal compatibility
+      const formatContent = (content) => {
+        if (typeof content === 'string') {
+          return [{ type: 'text', text: content }];
+        }
+        if (Array.isArray(content)) {
+          return content.map(part => {
+            if (typeof part === 'string') {
+              return { type: 'text', text: part };
+            }
+            if (part && typeof part === 'object' && !part.type) {
+              return { type: 'text', ...part };
+            }
+            return part;
+          });
+        }
+        return content;
+      };
+
+      const formattedInput = Array.isArray(input) 
+        ? input.map(msg => ({
+            ...msg,
+            content: formatContent(msg.content)
+          }))
+        : [{ role: 'user', content: formatContent(input) }];
+
       const payload = {
         model: modelId,
-        input: input,
+        input: formattedInput,
         stream: false,
         temperature: options.temperature ?? 0.7,
       };
@@ -679,9 +705,35 @@ export class LMStudioSwitcher {
       }
       
       // Prepare request payload with stream=true
+      // Ensure content is in the format [{ type: 'text', text: '...' }] for multimodal compatibility
+      const formatContent = (content) => {
+        if (typeof content === 'string') {
+          return [{ type: 'text', text: content }];
+        }
+        if (Array.isArray(content)) {
+          return content.map(part => {
+            if (typeof part === 'string') {
+              return { type: 'text', text: part };
+            }
+            if (part && typeof part === 'object' && !part.type) {
+              return { type: 'text', ...part };
+            }
+            return part;
+          });
+        }
+        return content;
+      };
+
+      const formattedInput = Array.isArray(input) 
+        ? input.map(msg => ({
+            ...msg,
+            content: formatContent(msg.content)
+          }))
+        : [{ role: 'user', content: formatContent(input) }];
+
       const payload = {
         model: modelId,
-        input: input,
+        input: formattedInput,
         stream: true,
         temperature: options.temperature ?? 0.7,
       };

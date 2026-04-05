@@ -11,8 +11,8 @@
  * - Feeds consolidated output to the main AI model
  */
 
-import { classifyTask, getTaskCategories } from '../utils/task-classifier.js';
-import { analyzeTask, decompose, selectTaskType } from '../utils/task-decomposer.js';
+import { classifyTask } from '../utils/task-classifier.js';
+import { analyzeTask, selectTaskType } from '../utils/task-decomposer.js';
 
 // Internal tracking for active research sessions
 const _activeResearches = new Map();
@@ -23,7 +23,7 @@ const _activeResearches = new Map();
  * @property {string} query - The original research query
  * @property {number} subtasksCount - Number of subtasks executed
  * @property {number} devicesUsed - Number of devices involved
- * @property {Array} agentResults - Results from each device's subagent
+ * @property {Array<Object>} agentResults - Results from each device's subagent
  * @property {Object} aggregatedResult - Final synthesized result
  * @property {boolean} success - Whether research completed successfully
  * @property {string|null} error - Error message if failed
@@ -57,11 +57,11 @@ export const researchTool = {
 /**
  * Analyze query complexity to determine research approach
  * @param {string} query - Research query to analyze
- * @returns {{ complexity: 'simple' | 'moderate' | 'complex', requiresParallelism: boolean }}
+ * @returns {Promise<{ complexity: 'simple' | 'moderate' | 'complex', requiresParallelism: boolean, requiredCapabilities: string[] }>}
  */
-export function analyzeResearchQuery(query) {
-  const classification = classifyTask(query);
-  const analysis = analyzeTask(query);
+export async function analyzeResearchQuery(query) {
+  const classification = await classifyTask(query);
+  const analysis = await analyzeTask(query);
   
   // Extend with additional complexity indicators
   const wordCount = query.trim().split(/\s+/).length;
@@ -91,14 +91,14 @@ export function analyzeResearchQuery(query) {
 /**
  * Get available devices for research subagents
  * @param {Array<string>} requiredCapabilities - Capabilities needed for the task
- * @returns {Promise<Array<{ deviceId: string, name: string, tier: string }>>}
+ * @returns {Promise<Array<{ deviceId: string, name: string, tier: string, capabilities: string[] }>>}
  */
 async function getResearchDevices(requiredCapabilities = []) {
   const { deviceRegistry } = await import('../services/device-registry.js');
   const onlineDevices = deviceRegistry.getOnlineDevices();
   
   if (onlineDevices.length === 0) {
-    return [{ deviceId: 'device-local', name: 'Local Device', tier: 'ultra' }];
+    return [{ deviceId: 'device-local', name: 'Local Device', tier: 'ultra', capabilities: [] }];
   }
 
   // Sort devices so those with required capabilities come first
@@ -172,10 +172,11 @@ function constructAgentPrompt(query, deviceInfo, options = {}) {
  * @returns {Promise<Object>} Device-specific result
  */
 async function executeOnDevice(params) {
-  const { query, deviceId, agentIndex } = params;
+  const { query, deviceId, agentIndex, startTime: paramStartTime } = params;
+  const startTime = paramStartTime || Date.now();
 
   // Determine if this is a simple or complex task for this device
-  const queryAnalysis = analyzeTask(query);
+  const queryAnalysis = await analyzeTask(query);
   
   let result;
   
@@ -195,9 +196,11 @@ async function executeOnDevice(params) {
   if (!result) {
     try {
       const { taskOrchestrator } = await import('../services/orchestrator.js');
+      const { Subtask } = await import('../utils/task-decomposer.js');
+      
       result = await taskOrchestrator.executePlan({
         originalTask: query,
-        subtasks: [new (await import('../utils/task-decomposer.js')).Subtask(
+        subtasks: [new Subtask(
           `subtask-${agentIndex}`,
           selectTaskType(query),
           constructAgentPrompt(query, { deviceId })
@@ -212,22 +215,29 @@ async function executeOnDevice(params) {
     }
   }
 
-  if (!result.success && result.success !== undefined) {
-    result = await taskOrchestrator.executePlan({
-      originalTask: query,
-      subtasks: [new (await import('../utils/task-decomposer.js')).Subtask(
-        `subtask-${agentIndex}`,
-        selectTaskType(query),
-        constructAgentPrompt(query, { deviceId })
-      )],
-      executionOrder: [[`subtask-${agentIndex}`]],
-      estimatedTotalTimeMs: 30000,
-      requiredDevices: new Set([deviceId]),
-    });
+  // Handle potential retry if first attempt failed
+  if (result && !result.success && result.success !== undefined) {
+    try {
+      const { taskOrchestrator } = await import('../services/orchestrator.js');
+      const { Subtask } = await import('../utils/task-decomposer.js');
+      result = await taskOrchestrator.executePlan({
+        originalTask: query,
+        subtasks: [new Subtask(
+          `subtask-${agentIndex}`,
+          selectTaskType(query),
+          constructAgentPrompt(query, { deviceId })
+        )],
+        executionOrder: [[`subtask-${agentIndex}`]],
+        estimatedTotalTimeMs: 30000,
+        requiredDevices: new Set([deviceId]),
+      });
+    } catch (retryError) {
+      console.error(`[Research] Retry execution failed on ${deviceId}: ${retryError.message}`);
+    }
   }
 
   // Get token count from result
-  const content = result.aggregatedResult?.content || '';
+  const content = result?.aggregatedResult?.content || '';
   const tokenCount = Math.round(content.length / 3); // Approximate tokens
 
   return {
@@ -236,9 +246,10 @@ async function executeOnDevice(params) {
     query,
     content,
     tokenCount,
-    success: true,
+    success: result?.success ?? false,
     analysis: queryAnalysis,
-    durationMs: Date.now() - (params.startTime || Date.now()),
+    durationMs: Date.now() - startTime,
+    error: result?.error || null
   };
 }
 
@@ -252,12 +263,12 @@ function aggregateResults(agentResults) {
   
   for (const result of agentResults) {
     synthesis += `### ${result.deviceId}\n\n`;
-    synthesis += `**Complexity:** ${result.analysis.complexity}\n`;
-    synthesis += `**Duration:** ${result.durationMs}ms\n\n`;
+    synthesis += `**Complexity:** ${result.analysis?.complexity || 'unknown'}\n`;
+    synthesis += `**Duration:** ${result.durationMs || 0}ms\n\n`;
     
     // Add content (truncated if needed)
-    const maxContentTokens = MAX_TOKENS_FOR_MAIN_MODEL / agentResults.length;
-    const contentPreview = result.content.substring(0, maxContentTokens * 3);
+    const maxContentTokens = MAX_TOKENS_FOR_MAIN_MODEL / (agentResults.length || 1);
+    const contentPreview = result.content.substring(0, Math.max(0, Math.floor(maxContentTokens * 3)));
     
     synthesis += `${contentPreview}\n\n---\n\n`;
   }
@@ -297,7 +308,7 @@ export async function executeResearch(params) {
   console.log(`[Research] Starting: "${query.substring(0, 80)}..."`);
 
   // Analyze query complexity
-  const analysis = analyzeResearchQuery(query);
+  const analysis = await analyzeResearchQuery(query);
   
   // Get available devices for research agents
   const devices = await getResearchDevices(analysis.requiredCapabilities);
@@ -324,7 +335,10 @@ export async function executeResearch(params) {
     agentCount = 1;
     
     if (optimalDevice) {
-      devices.unshift(devices.splice(devices.findIndex(d => d.deviceId === optimalDevice.deviceId), 1)[0]);
+      const index = devices.findIndex(d => d.deviceId === optimalDevice.deviceId);
+      if (index !== -1) {
+        devices.unshift(devices.splice(index, 1)[0]);
+      }
     }
   }
 
@@ -332,13 +346,13 @@ export async function executeResearch(params) {
 
   // Build execution tasks for each agent
   const executePromises = devices.slice(0, agentCount).map((device, index) => {
-    const startTime = Date.now();
+    const agentStartTime = Date.now();
     
     return executeOnDevice({
       query,
       deviceId: device.deviceId,
       agentIndex: index + 1,
-      startTime,
+      startTime: agentStartTime,
     });
   });
 

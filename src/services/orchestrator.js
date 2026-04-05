@@ -40,7 +40,8 @@ export class TaskOrchestrator {
     this.activePlans = new Map();
     
     // Configuration
-    this.defaultTimeoutMs = parseInt(process.env.REMOTE_DEVICE_TIMEOUT_MS || '60000');
+    this.defaultTimeoutMs = 60000;
+    this.orchestratorConfig = {};
   }
 
   /**
@@ -55,8 +56,11 @@ export class TaskOrchestrator {
     // Load DNA for orchestrator specific configs
     const { loadModelDNA } = await import('../utils/model-dna-manager.js');
     const dna = loadModelDNA();
-    if (dna?.orchestratorConfig?.defaultTimeoutMs) {
-      this.defaultTimeoutMs = dna.orchestratorConfig.defaultTimeoutMs;
+    if (dna?.orchestratorConfig) {
+      this.orchestratorConfig = dna.orchestratorConfig;
+      if (this.orchestratorConfig.defaultTimeoutMs) {
+        this.defaultTimeoutMs = this.orchestratorConfig.defaultTimeoutMs;
+      }
     }
 
     console.log('[Orchestrator] Initialized with', this.deviceRegistry.getAllDevices().length, 'devices');
@@ -102,12 +106,12 @@ export class TaskOrchestrator {
       };
     }
 
-    // Decompose into subtasks
-    const mode = context.smartDecomposition ? 'llm' : 'heuristic';
-    const subtasks = await decompose(task, { 
-      mode, 
-      maxSubtasks: context.maxSubtasks || 5 
-    });
+     // Decompose into subtasks
+     const mode = context.smartDecomposition ? 'llm' : 'heuristic';
+     const subtasks = await decompose(task, { 
+       mode, 
+       maxSubtasks: context.maxSubtasks || this.orchestratorConfig.maxSubtasks || 5 
+     });
     
     if (subtasks.length === 0) {
       throw new Error('Failed to decompose task - no subtasks generated');
@@ -132,7 +136,7 @@ export class TaskOrchestrator {
         requiredDevices.add(task.assignedDeviceId);
       } else {
         // Use optimal device based on capabilities
-        const optimal = this.loadTracker.findOptimalDevice(task);
+        const optimal = await this.loadTracker.findOptimalDevice(task);
         if (optimal) {
           requiredDevices.add(optimal.deviceId);
         }
@@ -202,10 +206,10 @@ export class TaskOrchestrator {
             console.log(`[Orchestrator] Waiting for dependencies: ${subtaskId}`);
           }
 
-          // Check device availability before dispatching
-          const canDispatch = this._canDispatch(subtask);
-          
-          if (canDispatch.allowed) {
+      // Check device availability before dispatching
+      const canDispatch = await this._canDispatch(subtask);
+      
+      if (canDispatch.allowed) {
             promises.push(this._dispatchAndTrack(subtask, planId, signal));
           } else {
             console.warn(`[Orchestrator] Cannot dispatch ${subtaskId}: ${canDispatch.reason}`);
@@ -287,7 +291,7 @@ export class TaskOrchestrator {
    */
   async dispatchSubtask(subtask, signal) {
     // Find optimal device for this subtask
-    const optimal = this.loadTracker.findOptimalDevice(subtask);
+    const optimal = await this.loadTracker.findOptimalDevice(subtask);
     
     if (!optimal) {
       subtask.complete({
@@ -360,75 +364,138 @@ export class TaskOrchestrator {
   }
 
   /**
-   * Aggregate results from completed subtasks into final response
+   * Aggregate results from completed subtasks into final response using semantic synthesis
    * @param {Subtask[]} completedSubtasks - Completed subtasks with results
-   * @returns {string} Aggregated synthesis of all results
+   * @param {string} originalTask - The original user task for context
+   * @returns {Promise<string>} Aggregated synthesis of all results
    */
-  aggregateResults(completedSubtasks) {
+  async aggregateResults(completedSubtasks, originalTask) {
     if (!Array.isArray(completedSubtasks) || completedSubtasks.length === 0) {
       return 'No subtasks were successfully completed.';
     }
 
-    // Sort by execution order (by ID)
-    const sorted = [...completedSubtasks].sort((a, b) => a.id.localeCompare(b.id));
-
-    // Build synthesized response
-    let synthesis = '';
-    
-    for (const task of sorted) {
-      if (!task.result?.content) continue;
-
-      synthesis += `## ${task.type.toUpperCase()}: ${task.id}\n\n`;
-      synthesis += `**Device:** ${task.result.deviceId || 'unknown'}\n`;
-      synthesis += `**Duration:** ${task.result.durationMs || 0}ms\n\n`;
-      synthesis += task.result.content;
-      synthesis += '\n\n---\n\n';
+    const successfulResults = completedSubtasks.filter(t => t.result?.success);
+    if (successfulResults.length === 0) {
+      return 'All subtasks failed to complete successfully.';
     }
 
-    // Add summary
-    const successful = completedSubtasks.filter(t => t.result?.success).length;
-    synthesis += `\n## Summary\n\n`;
-    synthesis += `Processed ${completedSubtasks.length} subtask(s), ${successful} successful.\n`;
+    // Sort by ID to maintain some order
+    const sorted = [...successfulResults].sort((a, b) => a.id.localeCompare(b.id));
 
-    return synthesis.trim();
+    // Prepare raw findings for the LLM
+    const rawFindings = sorted
+      .map(t => `[Subtask ${t.id} - ${t.type}]\n${t.result.content}`)
+      .join('\n\n---\n\n');
+
+    const taskSnippet = originalTask ? originalTask.substring(0, 50) : 'Unknown Task';
+    console.log(`[Orchestrator] Synthesizing ${sorted.length} subtask results for: "${taskSnippet}..."`);
+
+    try {
+      const synthesisModel = this.orchestratorConfig.synthesisModel || 'architect';
+      
+      const systemPrompt = `You are a master research synthesizer. Your goal is to take multiple fragmented research findings and combine them into a single, cohesive, and professional intelligence report.
+
+RULES:
+1. DO NOT simply concatenate. You must synthesize.
+2. Eliminate all redundancies and overlapping information.
+3. Organize the report logically (e.g., Executive Summary, Detailed Findings, Conclusion).
+4. Maintain a professional, objective, and authoritative tone.
+5. If findings from different subtasks contradict each other, highlight the discrepancy.
+6. Ensure the final report directly and comprehensively answers the original user request.
+7. Output ONLY the final report text. No conversational filler.`;
+
+      const completionResult = await this.lmStudioSwitcher.executeChatCompletion(
+        synthesisModel,
+        [
+          { role: 'system', content: systemPrompt },
+          {
+            role: 'user',
+            content: `Original Task: "${originalTask}"\n\nRaw Findings:\n${rawFindings}`,
+          },
+        ],
+        {
+          max_output_tokens: this.orchestratorConfig.finalAggregationMaxTokens || 8000,
+          temperature: 0.3,
+          taskType: 'synthesis',
+        }
+      );
+
+      if (!completionResult.success) {
+        throw new Error(completionResult.error);
+      }
+
+      console.log(`[Orchestrator] Semantic synthesis successful.`);
+      return completionResult.result.content.trim();
+
+    } catch (error) {
+      console.error(`[Orchestrator] Semantic synthesis failed, falling back to concatenation: ${error.message}`);
+      
+      // Fallback: Simple concatenation
+      let fallbackSynthesis = '';
+      for (const task of sorted) {
+        fallbackSynthesis += `## ${task.type.toUpperCase()}: ${task.id}\n\n`;
+        fallbackSynthesis += `**Device:** ${task.result.deviceId || 'unknown'}\n`;
+        fallbackSynthesis += `**Duration:** ${task.result.durationMs || 0}ms\n\n`;
+        fallbackSynthesis += task.result.content;
+        fallbackSynthesis += '\n\n---\n\n';
+      }
+
+      const successfulCount = sorted.length;
+      fallbackSynthesis += `\n## Summary\n\n`;
+      fallbackSynthesis += `Processed ${completedSubtasks.length} subtask(s), ${successfulCount} successful.\n`;
+
+      return fallbackSynthesis.trim();
+    }
   }
 
   /**
-   * Check if a subtask can be dispatched
+   * Check if a subtask can be dispatched with Dynamic QoS considerations
    * @param {Subtask} subtask - Subtask to check
-   * @returns {{ allowed: boolean, reason?: string }}
+   * @returns {Promise<{ allowed: boolean, reason?: string, qosLevel: 'standard' | 'high_priority' }>}
    */
-  _canDispatch(subtask) {
-    const deviceId = subtask.assignedDeviceId || this._findBestDeviceForSubtask(subtask)?.deviceId;
+  async _canDispatch(subtask) {
+    const deviceId = subtask.assignedDeviceId || (await this._findBestDeviceForSubtask(subtask))?.deviceId;
 
     if (!deviceId) {
-      return { allowed: false, reason: 'No available device for task' };
+      return { allowed: false, reason: 'No available device for task', qosLevel: 'standard' };
     }
 
     // Check device availability
     if (!this.deviceRegistry.isDeviceAvailable(deviceId)) {
-      return { allowed: false, reason: `Device ${deviceId} is offline` };
+      return { allowed: false, reason: `Device ${deviceId} is offline`, qosLevel: 'standard' };
     }
 
+    // Dynamic QoS: High priority tasks can bypass certain soft load limits
+    const isHighPriority = (subtask.priority || 3) >= 4;
+    const qosLevel = isHighPriority ? 'high_priority' : 'standard';
+
     // Check load constraints
-    const canAccept = this.loadTracker.canAcceptRequest(
+    const canAccept = await this.loadTracker.canAcceptRequest(
       deviceId,
-      subtask.assignedModelKey || null
+      subtask.assignedModelKey || null,
+      subtask.priority || 3
     );
 
     if (!canAccept.allowed) {
-      return { ...canAccept };
+      // If it's high priority, we might allow it to proceed if the reason is just a "soft" limit
+      // (This would require the loadTracker to distinguish between hard and soft limits)
+      if (isHighPriority && canAccept.reason?.includes('cooldown')) {
+        console.log(`[Orchestrator] High priority task ${subtask.id} bypassing cooldown on ${deviceId}`);
+        return { allowed: true, qosLevel: 'high_priority' };
+      }
+      
+      return { ...canAccept, qosLevel };
     }
 
-    return { allowed: true };
+    return { allowed: true, qosLevel };
   }
 
   /**
    * Find best device for a subtask based on capabilities and load
    * @param {Subtask} subtask - Subtask to assign
-   * @returns {{ deviceId: string; modelKey: string }|null}
+   * @returns {Promise<{ deviceId: string; modelKey: string }|null>} Optimal device or null
    */
-  _findBestDeviceForSubtask(subtask) {
+  async _findBestDeviceForSubtask(subtask) {
     const requiredCapabilities = subtask.requiredCapabilities;
     
     // First try preferred device if specified
@@ -440,7 +507,7 @@ export class TaskOrchestrator {
     }
 
     // Find optimal device based on load and capabilities
-    return this.loadTracker.findOptimalDevice({ ...subtask });
+    return await this.loadTracker.findOptimalDevice({ ...subtask });
   }
 
   /**

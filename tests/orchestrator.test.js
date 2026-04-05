@@ -430,6 +430,7 @@ describe('TaskOrchestrator', () => {
     });
 
     it('should synthesize completed results', () => {
+      const originalTask = 'Test task for synthesis';
       const subtasks = [
         new Subtask('subtask-1', TASK_TYPES.RESEARCH, 'Test'),
         new Subtask('subtask-2', TASK_TYPES.ANALYSIS, 'Test'),
@@ -439,7 +440,7 @@ describe('TaskOrchestrator', () => {
       subtasks[0].complete({ success: true, content: 'Result 1', deviceId: 'device-local' });
       subtasks[1].complete({ success: true, content: 'Result 2', deviceId: 'device-remote' });
       
-      const aggregated = taskOrchestrator.aggregateResults(subtasks);
+      const aggregated = taskOrchestrator.aggregateResults(subtasks, originalTask);
       
       assert.ok(aggregated.includes('Result 1'), 'Should include first result');
       assert.ok(aggregated.includes('Result 2'), 'Should include second result');
