@@ -218,7 +218,7 @@ export const MODEL_DNA_SCHEMA = {
  */
 export function getDefaultDNA() {
   return {
-    version: 4,
+    version: 5,
     primaryRole: "conversationalist",
     models: {
       conversationalist: {
@@ -679,7 +679,7 @@ const MIGRATIONS = {
       migrated.orchestratorConfig.maxModelsPerDevice = {};
       
       // If old globalMaxModels exists, apply it as a fallback
-      if (migrated.orchestratorConfig.globalMaxModels) {
+      if (migrated.orchestrConfig && migrated.orchestratorConfig.globalMaxModels) {
         console.log(`[DNA] Migrating globalMaxModels=${migrated.orchestratorConfig.globalMaxModels} to maxModelsPerDevice`);
         migrated.orchestratorConfig.maxModelsPerDevice["*"] = migrated.orchestratorConfig.globalMaxModels;
       }
@@ -730,7 +730,7 @@ export function applyMigration(dna) {
     return dna;
   }
 
-  const currentVersion = 4; // Latest schema version (added maxModelsPerDevice)
+  const currentVersion = 5; // Latest schema version (added swarm configuration)
   const sourceVersion = dna.version || 1;
   let migrated = { ...dna };
 
@@ -767,7 +767,26 @@ export function loadDNAFromFile(filePath) {
   try {
     const content = readFileSync(filePath, "utf-8");
     const dna = JSON.parse(content);
-    return applyMigration(dna);
+
+    // If it doesn't have a version and doesn't have any DNA-like keys, 
+    // it's probably not a DNA file.
+    const isLikelyDNA = dna.version !== undefined || dna.models !== undefined || dna.primaryRole !== undefined;
+    if (!isLikelyDNA) {
+      return null;
+    }
+
+    const migratedDna = applyMigration(dna);
+
+    // If migration happened, persist the new version to disk
+    if (migratedDna.version !== dna.version) {
+      const saveResult = saveDNAToFile(filePath, migratedDna);
+      if (!saveResult.success) {
+        console.error(`[DNA] Migration failed to persist to ${filePath}:`, saveResult.errors);
+        return null;
+      }
+    }
+
+    return migratedDna;
   } catch (error) {
     console.error(`[DNA] Failed to load ${filePath}:`, error.message);
     return null;
